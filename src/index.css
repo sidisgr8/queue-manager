@@ -1,7 +1,16 @@
-/* src/index.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 :root {
-  --bg-color: #f8fafc;
-  --text-primary: #1e293b;
+  --bg-color: #fafafa;
+  --surface-color: #ffffff;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --border-color: #e5e7eb;
+  --accent-color: #000000;
+  --accent-hover: #374151;
+  --primary-blue: #2563eb;
+  --danger-color: #ef4444;
+  --success-color: #10b981;
 }
 
 body {
@@ -13,60 +22,121 @@ body {
   min-height: 100vh;
 }
 
-/* Smooth Fade In Animation */
+/* Minimalist Animations */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(15px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 .animate-fade-in {
-  animation: fadeIn 0.5s ease-out forwards;
+  animation: fadeIn 0.4s ease-out forwards;
 }
 
-/* Modern Hover Cards */
-.hover-card {
-  transition: all 0.3s ease;
-  border: none;
-  border-radius: 1rem;
+/* Minimal Cards */
+.minimal-card {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
-.hover-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 15px 30px rgba(0,0,0,0.08) !important;
+.minimal-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border-color: #d1d5db;
 }
 
-/* Beautiful Gradient Backgrounds for Headers/Buttons */
-.bg-gradient-primary {
-  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+/* Typography & Layout Utilities */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.text-muted {
+  color: var(--text-secondary) !important;
+}
+
+/* Minimal Inputs */
+.minimal-input {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+  color: var(--text-primary);
+}
+
+.minimal-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+/* Minimal Buttons */
+.btn-minimal-dark {
+  background-color: var(--accent-color);
+  color: white;
+  border: 1px solid var(--accent-color);
+  border-radius: 8px;
+  padding: 0.6rem 1.2rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+}
+
+.btn-minimal-dark:hover {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
   color: white;
 }
 
-.btn-gradient {
-  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-  border: none;
-  color: white;
-  transition: opacity 0.2s;
+.btn-minimal-dark:disabled {
+  background-color: var(--border-color);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  cursor: not-allowed;
 }
 
-.btn-gradient:hover {
-  opacity: 0.9;
-  color: white;
+.btn-minimal-outline {
+  background-color: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.6rem 1.2rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: all 0.2s;
 }
 
-/* Active Queue Pulse */
-.status-pulse {
-  height: 10px;
-  width: 10px;
-  background-color: #10b981;
+.btn-minimal-outline:hover {
+  background-color: #f9fafb;
+  border-color: #d1d5db;
+}
+
+/* Status Dots */
+.status-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   display: inline-block;
-  margin-right: 8px;
-  box-shadow: 0 0 0 rgba(16, 185, 129, 0.4);
-  animation: pulse 2s infinite;
 }
 
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
-  70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+.status-active { background-color: var(--success-color); }
+.status-paused { background-color: #f59e0b; }
+
+/* Custom Badge */
+.minimal-badge {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  background: #f3f4f6;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+.minimal-badge.active {
+  background: #eff6ff;
+  color: var(--primary-blue);
+  border-color: #bfdbfe;
 }

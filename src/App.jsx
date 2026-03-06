@@ -1,23 +1,24 @@
 import { useState } from "react";
 
 function App() {
-  // --- MOCK DATABASE (Replace with MongoDB fetch calls later) ---
+  // --- MOCK DATABASE ---
   const [users, setUsers] = useState([]); 
   const [queues, setQueues] = useState([]);
 
   // --- SESSION STATE ---
   const [currentUser, setCurrentUser] = useState(null);
   const [authMode, setAuthMode] = useState("login"); 
-  const [toast, setToast] = useState({ message: "", type: "" });
+  const [notification, setNotification] = useState("");
 
   // --- FORM STATE ---
   const [authForm, setAuthForm] = useState({ username: "", password: "", role: "customer" });
-  const [newQueueName, setNewQueueName] = useState("");
+  const [newQueue, setNewQueue] = useState({ name: "", avgTime: 5 });
+  const [searchQuery, setSearchQuery] = useState("");
 
   // --- HELPER: SHOW NOTIFICATIONS ---
-  const showToast = (message, type = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast({ message: "", type: "" }), 3000);
+  const showNotification = (message) => {
+    setNotification(message);
+    setTimeout(() => setNotification(""), 3000);
   };
 
   // --- AUTHENTICATION ---
@@ -26,26 +27,25 @@ function App() {
     const { username, password, role } = authForm;
 
     if (!username || !password) {
-      showToast("Please fill in all fields", "danger");
+      showNotification("Please fill in all fields.");
       return;
     }
 
     if (authMode === "register") {
       if (users.some((u) => u.username === username)) {
-        showToast("Username already taken", "danger");
+        showNotification("Username is already taken.");
         return;
       }
       setUsers([...users, { username, password, role }]);
-      showToast("Account created successfully! Please log in.");
+      showNotification("Account created. Please log in.");
       setAuthMode("login");
       setAuthForm({ ...authForm, password: "" });
     } else {
       const foundUser = users.find(u => u.username === username && u.password === password);
       if (foundUser) {
         setCurrentUser(foundUser);
-        showToast(`Welcome back, ${foundUser.username}!`);
       } else {
-        showToast("Invalid credentials", "danger");
+        showNotification("Invalid credentials.");
       }
     }
   };
@@ -53,23 +53,35 @@ function App() {
   const handleLogout = () => {
     setCurrentUser(null);
     setAuthForm({ username: "", password: "", role: "customer" });
+    setSearchQuery("");
   };
 
   // --- QUEUE MANAGEMENT (MANAGER) ---
   const createQueue = (e) => {
     e.preventDefault();
-    if (!newQueueName.trim()) return;
+    if (!newQueue.name.trim()) return;
     
     setQueues([
       ...queues,
-      { id: Date.now(), name: newQueueName, manager: currentUser.username, customers: [] }
+      { 
+        id: Date.now(), 
+        name: newQueue.name, 
+        manager: currentUser.username, 
+        customers: [],
+        status: 'active',
+        avgTime: parseInt(newQueue.avgTime) || 5
+      }
     ]);
-    setNewQueueName("");
-    showToast("Queue created successfully!");
+    setNewQueue({ name: "", avgTime: 5 });
+    showNotification("Queue created successfully.");
   };
 
-  const deleteQueue = (id) => {
-    setQueues(queues.filter(q => q.id !== id));
+  const deleteQueue = (id) => setQueues(queues.filter(q => q.id !== id));
+
+  const toggleQueueStatus = (id) => {
+    setQueues(queues.map(q => 
+      q.id === id ? { ...q, status: q.status === 'active' ? 'paused' : 'active' } : q
+    ));
   };
 
   const processQueue = (id, action, customerName = null) => {
@@ -84,7 +96,7 @@ function App() {
   // --- QUEUE ACTIONS (CUSTOMER) ---
   const joinQueue = (id) => {
     setQueues(queues.map(q => 
-      q.id === id && !q.customers.includes(currentUser.username)
+      q.id === id && !q.customers.includes(currentUser.username) && q.status === 'active'
         ? { ...q, customers: [...q.customers, currentUser.username] }
         : q
     ));
@@ -98,47 +110,53 @@ function App() {
     ));
   };
 
+  const filteredQueues = queues.filter(q => 
+    q.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    q.manager.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   // --- UI RENDERING ---
   return (
     <div className="container py-5 min-vh-100 d-flex flex-column">
       
-      {/* Toast Notification */}
-      {toast.message && (
-        <div className={`alert alert-${toast.type} position-fixed top-0 start-50 translate-middle-x mt-4 shadow animate-fade-in`} style={{ zIndex: 1050, minWidth: '300px', textAlign: 'center', borderRadius: '10px' }}>
-          {toast.message}
+      {/* Minimal Notification */}
+      {notification && (
+        <div className="position-fixed top-0 start-50 translate-middle-x mt-4 animate-fade-in" style={{ zIndex: 1050 }}>
+          <div className="bg-dark text-white px-4 py-2 rounded shadow-sm text-sm">
+            {notification}
+          </div>
         </div>
       )}
 
       {!currentUser ? (
-        // --- LOGIN / REGISTER SCREEN ---
+        // --- LOGIN / REGISTER ---
         <div className="row justify-content-center align-items-center flex-grow-1 animate-fade-in">
-          <div className="col-11 col-md-6 col-lg-5">
-            <div className="card hover-card shadow-sm p-4 p-md-5">
-              <div className="text-center mb-4">
-                <div className="bg-gradient-primary rounded-circle d-inline-flex align-items-center justify-content-center mb-3" style={{width: '60px', height: '60px'}}>
-                  <span className="fs-3 text-white">Q</span>
-                </div>
-                <h2 className="fw-bold">{authMode === 'login' ? 'Welcome Back' : 'Create Account'}</h2>
-                <p className="text-muted">Smart Queue Management System</p>
+          <div className="col-11 col-md-5 col-lg-4">
+            <div className="minimal-card p-4 p-md-5">
+              <div className="mb-4">
+                <h3 className="fw-bold text-dark mb-1">QueueSys.</h3>
+                <p className="text-muted small">
+                  {authMode === 'login' ? 'Sign in to your account' : 'Register a new account'}
+                </p>
               </div>
 
               <form onSubmit={handleAuthSubmit}>
                 <div className="mb-3">
-                  <label className="form-label text-muted fw-bold small text-uppercase">Username</label>
+                  <label className="form-label text-muted small fw-medium">Username</label>
                   <input
                     type="text"
-                    className="form-control form-control-lg bg-light"
+                    className="form-control minimal-input w-100"
                     value={authForm.username}
                     onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
                     required
                   />
                 </div>
                 
-                <div className="mb-3">
-                  <label className="form-label text-muted fw-bold small text-uppercase">Password</label>
+                <div className="mb-4">
+                  <label className="form-label text-muted small fw-medium">Password</label>
                   <input
                     type="password"
-                    className="form-control form-control-lg bg-light"
+                    className="form-control minimal-input w-100"
                     value={authForm.password}
                     onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
                     required
@@ -146,36 +164,33 @@ function App() {
                 </div>
 
                 {authMode === 'register' && (
-                  <div className="mb-4">
-                    <label className="form-label text-muted fw-bold small text-uppercase">Select Role</label>
+                  <div className="mb-4 animate-fade-in">
+                    <label className="form-label text-muted small fw-medium">Account Type</label>
                     <select
-                      className="form-select form-select-lg bg-light"
+                      className="form-select minimal-input w-100"
                       value={authForm.role}
                       onChange={(e) => setAuthForm({ ...authForm, role: e.target.value })}
                     >
                       <option value="customer">Customer</option>
-                      <option value="manager">Queue Manager</option>
+                      <option value="manager">Manager</option>
                     </select>
                   </div>
                 )}
 
-                <button className="btn btn-gradient btn-lg w-100 mt-2 mb-3 rounded-3 shadow-sm">
-                  {authMode === 'login' ? 'Sign In' : 'Register Now'}
+                <button className="btn-minimal-dark w-100 mb-3">
+                  {authMode === 'login' ? 'Sign In' : 'Register'}
                 </button>
               </form>
 
-              <div className="text-center mt-3">
-                <span className="text-muted">
-                  {authMode === 'login' ? "New here? " : "Already have an account? "}
-                </span>
+              <div className="text-center mt-2 pt-3 border-top border-light">
                 <button 
-                  className="btn btn-link p-0 text-decoration-none fw-bold" 
+                  className="btn btn-link p-0 text-decoration-none text-muted small" 
                   onClick={() => {
                     setAuthMode(authMode === 'login' ? 'register' : 'login');
-                    setToast({ message: "", type: "" });
+                    setNotification("");
                   }}
                 >
-                  {authMode === 'login' ? 'Create an account' : 'Sign in'}
+                  {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Sign in'}
                 </button>
               </div>
             </div>
@@ -185,76 +200,92 @@ function App() {
         // --- MAIN DASHBOARD ---
         <div className="animate-fade-in">
           {/* Top Navbar */}
-          <nav className="card hover-card shadow-sm mb-5 border-0">
-            <div className="card-body d-flex justify-content-between align-items-center px-4 py-3">
-              <div className="d-flex align-items-center gap-2">
-                <div className="bg-gradient-primary rounded px-2 py-1 text-white fw-bold">Q</div>
-                <h4 className="mb-0 fw-bold d-none d-sm-block">QueueSystem</h4>
+          <div className="d-flex justify-content-between align-items-center mb-5 pb-3 border-bottom">
+            <h4 className="m-0 fw-bold">QueueSys.</h4>
+            <div className="d-flex align-items-center gap-3">
+              <div className="text-end d-none d-sm-block">
+                <div className="fw-medium small text-dark">{currentUser.username}</div>
+                <div className="text-muted" style={{fontSize: '0.7rem', textTransform: 'uppercase'}}>{currentUser.role}</div>
               </div>
-              <div className="d-flex align-items-center gap-4">
-                <div className="text-end">
-                  <div className="fw-bold fs-5">{currentUser.username}</div>
-                  <span className={`badge ${currentUser.role === 'manager' ? 'bg-primary' : 'bg-success'} rounded-pill text-uppercase`}>
-                    {currentUser.role}
-                  </span>
-                </div>
-                <button onClick={handleLogout} className="btn btn-light border rounded-circle p-2" title="Logout">
-                  <span aria-hidden="true">🚪</span>
-                </button>
-              </div>
+              <button onClick={handleLogout} className="btn-minimal-outline py-1 px-3 text-sm">
+                Log out
+              </button>
             </div>
-          </nav>
+          </div>
 
           {/* MANAGER VIEW */}
           {currentUser.role === 'manager' && (
             <div className="row g-4">
-              <div className="col-12">
-                <div className="card hover-card shadow-sm border-0 bg-white p-4">
-                  <h5 className="fw-bold mb-3">Launch a New Queue</h5>
-                  <form onSubmit={createQueue} className="d-flex flex-column flex-md-row gap-3">
-                    <input 
-                      className="form-control form-control-lg bg-light border-0"
-                      placeholder="e.g. Dr. Smith Consultation, Table Checkout..."
-                      value={newQueueName}
-                      onChange={(e) => setNewQueueName(e.target.value)}
-                      required
-                    />
-                    <button className="btn btn-gradient px-5 btn-lg rounded-3 shadow-sm">Create</button>
+              <div className="col-12 mb-2">
+                <h6 className="text-muted text-uppercase mb-3" style={{letterSpacing: '0.05em'}}>Create Queue</h6>
+                <div className="minimal-card p-4">
+                  <form onSubmit={createQueue} className="row g-3 align-items-end">
+                    <div className="col-md-7">
+                      <label className="form-label text-muted small mb-1">Queue Name</label>
+                      <input 
+                        className="form-control minimal-input"
+                        placeholder="e.g. Help Desk"
+                        value={newQueue.name}
+                        onChange={(e) => setNewQueue({ ...newQueue, name: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div className="col-md-3">
+                      <label className="form-label text-muted small mb-1">Est. Time (mins)</label>
+                      <input 
+                        type="number"
+                        min="1"
+                        className="form-control minimal-input"
+                        value={newQueue.avgTime}
+                        onChange={(e) => setNewQueue({ ...newQueue, avgTime: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div className="col-md-2">
+                      <button className="btn-minimal-dark w-100">Create</button>
+                    </div>
                   </form>
                 </div>
               </div>
 
-              <div className="col-12 mt-5">
-                <h5 className="fw-bold text-muted mb-4 px-2">YOUR ACTIVE QUEUES</h5>
+              <div className="col-12">
+                <h6 className="text-muted text-uppercase mb-3 mt-4" style={{letterSpacing: '0.05em'}}>Active Queues</h6>
                 <div className="row g-4">
                   {queues.filter(q => q.manager === currentUser.username).map(queue => (
-                    <div key={queue.id} className="col-md-6 col-xl-4">
-                      <div className="card hover-card shadow-sm border-0 h-100 overflow-hidden">
-                        <div className="bg-gradient-primary p-3 d-flex justify-content-between align-items-center">
-                          <h5 className="mb-0 fw-bold text-white text-truncate pe-2">{queue.name}</h5>
-                          <span className="badge bg-white text-primary rounded-pill fs-6 px-3 py-2 shadow-sm">
-                            {queue.customers.length} Waiting
-                          </span>
+                    <div key={queue.id} className="col-md-6 col-xl-4 animate-fade-in">
+                      <div className="minimal-card h-100 d-flex flex-column">
+                        <div className="p-4 border-bottom">
+                          <div className="d-flex justify-content-between align-items-start mb-1">
+                            <h5 className="fw-bold mb-0 text-truncate pe-2">{queue.name}</h5>
+                            <button 
+                              className="btn btn-link p-0 text-decoration-none text-muted small"
+                              onClick={() => toggleQueueStatus(queue.id)}
+                            >
+                              {queue.status === 'active' ? 'Pause' : 'Resume'}
+                            </button>
+                          </div>
+                          <div className="d-flex align-items-center gap-2 mt-2">
+                            <span className={`status-dot ${queue.status === 'active' ? 'status-active' : 'status-paused'}`}></span>
+                            <span className="text-muted small text-capitalize">{queue.status}</span>
+                            <span className="text-muted small ms-auto">{queue.avgTime}m / person</span>
+                          </div>
                         </div>
                         
-                        <div className="card-body p-0">
+                        <div className="card-body p-0 flex-grow-1">
                           {queue.customers.length === 0 ? (
-                            <div className="text-center text-muted py-5">
-                              <div className="fs-1 mb-2">🪑</div>
-                              <p className="mb-0">No one is waiting yet.</p>
+                            <div className="text-center text-muted py-5 small">
+                              Queue is empty.
                             </div>
                           ) : (
                             <ul className="list-group list-group-flush">
                               {queue.customers.map((c, i) => (
-                                <li key={i} className="list-group-item p-3 d-flex justify-content-between align-items-center">
+                                <li key={i} className="list-group-item bg-transparent p-3 d-flex justify-content-between align-items-center border-0 border-bottom">
                                   <div className="d-flex align-items-center gap-3">
-                                    <span className={`badge rounded-circle d-flex align-items-center justify-content-center shadow-sm ${i === 0 ? 'bg-success fs-6' : 'bg-light text-dark border'}`} style={{width: i === 0 ? '35px' : '30px', height: i === 0 ? '35px' : '30px'}}>
-                                      {i + 1}
-                                    </span>
-                                    <span className={`fs-5 ${i === 0 ? 'fw-bold text-success' : 'fw-medium'}`}>{c}</span>
+                                    <span className="text-muted small" style={{width: '20px'}}>{i + 1}.</span>
+                                    <span className={`small ${i === 0 ? 'fw-bold' : ''}`}>{c}</span>
                                   </div>
                                   <button 
-                                    className="btn btn-sm btn-outline-danger rounded-pill px-3"
+                                    className="btn btn-link text-muted p-0 text-decoration-none small"
                                     onClick={() => processQueue(queue.id, 'remove', c)}
                                   >
                                     Remove
@@ -264,20 +295,20 @@ function App() {
                             </ul>
                           )}
                         </div>
-                        <div className="card-footer bg-white border-top p-3 d-flex gap-2">
+
+                        <div className="p-3 bg-light border-top d-flex gap-2 rounded-bottom">
                           <button 
-                            className="btn btn-success flex-grow-1 fw-bold rounded-3 py-2"
+                            className="btn-minimal-dark flex-grow-1 text-sm py-1"
                             disabled={queue.customers.length === 0}
                             onClick={() => processQueue(queue.id, 'next')}
                           >
-                            Call Next Person
+                            Call Next
                           </button>
                           <button 
-                            className="btn btn-danger rounded-3 px-3"
+                            className="btn-minimal-outline text-danger py-1 px-3 border-danger"
                             onClick={() => deleteQueue(queue.id)}
-                            title="Delete Queue"
                           >
-                            🗑️
+                            Delete
                           </button>
                         </div>
                       </div>
@@ -291,53 +322,69 @@ function App() {
           {/* CUSTOMER VIEW */}
           {currentUser.role === 'customer' && (
             <div>
-              <h5 className="fw-bold text-muted mb-4 px-2">JOIN A QUEUE</h5>
+              <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4">
+                <h6 className="text-muted text-uppercase m-0" style={{letterSpacing: '0.05em'}}>Available Queues</h6>
+                <input 
+                  type="text" 
+                  className="form-control minimal-input mt-3 mt-md-0" 
+                  placeholder="Search queues..." 
+                  style={{maxWidth: '250px'}}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+
               <div className="row g-4">
-                {queues.length === 0 && (
-                  <div className="col-12 text-center py-5">
-                    <div className="fs-1 mb-3">🏢</div>
-                    <p className="text-muted fs-5">There are no active queues available right now.</p>
+                {filteredQueues.length === 0 && (
+                  <div className="col-12 text-center py-5 text-muted small">
+                    No queues found.
                   </div>
                 )}
                 
-                {queues.map(queue => {
+                {filteredQueues.map(queue => {
                   const myPos = queue.customers.indexOf(currentUser.username);
                   const inQueue = myPos !== -1;
+                  const estimatedWait = myPos > 0 ? myPos * queue.avgTime : 0;
                   
                   return (
-                    <div key={queue.id} className="col-md-6 col-xl-4">
-                      <div className={`card hover-card shadow-sm h-100 border-0 ${inQueue ? 'ring ring-primary ring-offset-2' : ''}`} style={inQueue ? {boxShadow: '0 0 0 3px #4f46e5'} : {}}>
-                        <div className="card-body p-4">
-                          <div className="d-flex justify-content-between align-items-start mb-3">
-                            <div>
-                              <h4 className="fw-bold mb-1">{queue.name}</h4>
-                              <p className="text-muted small mb-0">Manager: {queue.manager}</p>
-                            </div>
-                            {inQueue && <span className="badge bg-primary px-3 py-2 rounded-pill shadow-sm animate-fade-in">Joined</span>}
+                    <div key={queue.id} className="col-md-6 col-xl-4 animate-fade-in">
+                      <div className="minimal-card h-100 overflow-hidden" style={inQueue ? {borderColor: 'var(--text-primary)'} : {}}>
+                        <div className="p-4">
+                          <div className="d-flex justify-content-between align-items-start mb-2">
+                            <h5 className="fw-bold mb-0 text-dark">{queue.name}</h5>
+                            {inQueue && <span className="minimal-badge active">Joined</span>}
                           </div>
                           
-                          <div className="bg-light rounded-3 p-3 mb-4 d-flex justify-content-between align-items-center border">
-                            <div className="d-flex align-items-center">
-                              <div className="status-pulse"></div>
-                              <span className="fw-bold text-muted small text-uppercase">Live Status</span>
+                          <div className="text-muted small mb-4">
+                            Manager: {queue.manager}
+                          </div>
+                          
+                          <div className="d-flex justify-content-between align-items-center mb-4 pb-4 border-bottom">
+                            <div className="d-flex align-items-center gap-2">
+                              <span className={`status-dot ${queue.status === 'active' ? 'status-active' : 'status-paused'}`}></span>
+                              <span className="small text-muted text-capitalize">{queue.status}</span>
                             </div>
                             <div className="text-end">
-                              <span className="fs-3 fw-bold">{queue.customers.length}</span>
+                              <span className="fw-bold">{queue.customers.length}</span>
                               <span className="text-muted small ms-1">waiting</span>
                             </div>
                           </div>
 
                           {inQueue ? (
-                            <div className="text-center animate-fade-in bg-white border rounded-3 p-3 mb-3 shadow-sm">
-                              <p className="text-muted mb-1 small text-uppercase fw-bold">Your Position</p>
-                              <div className="display-4 fw-bold text-primary mb-2">#{myPos + 1}</div>
+                            <div className="text-center animate-fade-in">
+                              <div className="text-muted small mb-1">Your Position</div>
+                              <div className="fs-2 fw-bold mb-2">#{myPos + 1}</div>
+                              
                               {myPos === 0 ? (
-                                <div className="badge bg-success w-100 py-2 fs-6 rounded-pill mb-2">It's your turn! 🎉</div>
+                                <div className="text-success small fw-medium mb-3">It's your turn.</div>
                               ) : (
-                                <div className="text-muted small mb-2">{myPos} people ahead of you</div>
+                                <div className="text-muted small mb-3">
+                                  Est. wait: {estimatedWait} mins
+                                </div>
                               )}
+                              
                               <button 
-                                className="btn btn-outline-danger w-100 rounded-pill fw-bold mt-2"
+                                className="btn-minimal-outline w-100 text-danger"
                                 onClick={() => leaveQueue(queue.id)}
                               >
                                 Leave Queue
@@ -345,10 +392,11 @@ function App() {
                             </div>
                           ) : (
                             <button 
-                              className="btn btn-dark w-100 rounded-pill py-3 fw-bold fs-5 shadow-sm"
+                              className="btn-minimal-dark w-100"
                               onClick={() => joinQueue(queue.id)}
+                              disabled={queue.status === 'paused'}
                             >
-                              Join Queue
+                              {queue.status === 'active' ? 'Join Queue' : 'Paused'}
                             </button>
                           )}
                         </div>
