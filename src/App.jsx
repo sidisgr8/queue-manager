@@ -6,7 +6,8 @@ import {
   ChevronUp, ChevronDown, GripVertical, MapPin, User, Lock
 } from "lucide-react";
 
-const API_URL = "http://localhost:5000/api";
+// Vite uses import.meta.env to access environment variables
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const CATEGORIES = ["Restaurant", "Hospital", "Bank", "Retail", "Event", "Other"];
 
