@@ -26,6 +26,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 
 // Helper to extract coordinates from a pasted Google Maps URL
 const extractCoordinatesFromUrl = (url) => {
+  if (!url) return null;
   const regex = /@(-?\d+\.\d+),(-?\d+\.\d+)/;
   const match = url.match(regex);
   if(match) {
@@ -37,8 +38,12 @@ const extractCoordinatesFromUrl = (url) => {
 function App() {
   const [queues, setQueues] = useState([]);
   const [currentUser, setCurrentUser] = useState(() => {
-    const savedUser = localStorage.getItem('queueManagerUser');
-    return savedUser ? JSON.parse(savedUser) : null;
+    try {
+      const savedUser = localStorage.getItem('queueManagerUser');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch {
+      return null;
+    }
   });
   const [authMode, setAuthMode] = useState("login"); 
   const [notification, setNotification] = useState("");
@@ -57,7 +62,6 @@ function App() {
 
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [processingActionId, setProcessingActionId] = useState(null); 
-  const [now, setNow] = useState(Date.now());
   
   const [userLocation, setUserLocation] = useState(null);
   const [joinNotes, setJoinNotes] = useState({});
@@ -102,7 +106,9 @@ function App() {
     if (dragState.index === dropIndex) return;
 
     const queue = queues.find(q => q._id === targetQueueId);
-    const newCustomers = [...queue.customers];
+    if (!queue) return;
+    
+    const newCustomers = [...(queue.customers || [])];
     const [draggedCustomer] = newCustomers.splice(dragState.index, 1);
     newCustomers.splice(dropIndex, 0, draggedCustomer);
     
@@ -114,6 +120,8 @@ function App() {
     if (processingActionId === queueId) return;
     
     const queue = queues.find(q => q._id === queueId);
+    if (!queue || !queue.customers) return;
+    
     const newIndex = currentIndex + direction;
     if (newIndex < 0 || newIndex >= queue.customers.length) return;
 
@@ -133,8 +141,10 @@ function App() {
   const playNotificationSound = () => {
     try {
       const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-      audio.play().catch(e => console.log("Audio play blocked by browser interaction policies"));
-    } catch (err) {}
+      audio.play().catch(() => console.log("Audio play blocked by browser interaction policies"));
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleImageUpload = (e) => {
@@ -169,7 +179,7 @@ function App() {
         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
         const data = await res.json();
         
-        const cleanAddress = data.display_name.split(',').slice(0, 3).join(',') || "Pinned Map Location";
+        const cleanAddress = data.display_name ? data.display_name.split(',').slice(0, 3).join(',') : "Pinned Map Location";
         
         if (isEdit) {
           setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: cleanAddress } }));
@@ -237,7 +247,7 @@ function App() {
           try {
             const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
             const data = await res.json();
-            const cleanAddress = data.display_name.split(',').slice(0, 3).join(',') || "Current Location";
+            const cleanAddress = data.display_name ? data.display_name.split(',').slice(0, 3).join(',') : "Current Location";
             
             if (isEdit) {
               setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: cleanAddress } }));
@@ -261,7 +271,7 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/queues`);
       const data = await res.json();
-      setQueues(data);
+      setQueues(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch queues");
     } finally {
@@ -274,20 +284,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (currentUser?.role === 'customer') {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-          () => console.log("Location access denied.")
-        );
-      }
+    if (currentUser?.role === 'customer' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => console.log("Location access denied.")
+      );
     }
   }, [currentUser]);
-
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 10000);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     if (!editingQueue && !editingCustomerTime && !processingActionId) {
@@ -302,7 +305,7 @@ function App() {
       let changed = false;
 
       queues.forEach(q => {
-        const myPos = q.customers.findIndex(c => c.username === currentUser.username);
+        const myPos = (q.customers || []).findIndex(c => c.username === currentUser.username);
         
         if (myPos === 0 && !notifiedQueues.includes(q._id)) {
           showNotification(`It's your turn in ${q.name}! Please proceed.`);
@@ -388,7 +391,8 @@ function App() {
         }),
       });
       setNewQueue({ name: "", avgTime: 5, image: "", address: "", lat: "", lng: "", category: "Other" });
-      document.getElementById("createQueueFileInput").value = "";
+      const fileInput = document.getElementById("createQueueFileInput");
+      if(fileInput) fileInput.value = "";
       showNotification("Queue created successfully.");
       await fetchQueues();
     } catch (err) {
@@ -400,6 +404,8 @@ function App() {
 
   const updateQueueDetails = async (e) => {
     e.preventDefault();
+    if (!editingQueue) return;
+    
     setProcessingActionId(editingQueue._id);
     try {
       await fetch(`${API_URL}/queues/${editingQueue._id}`, {
@@ -431,7 +437,7 @@ function App() {
       if (q._id !== queueId) return q;
       return {
         ...q,
-        customers: q.customers.map(c => c.username === username ? { ...c, expectedTime: parseInt(time) } : c)
+        customers: (q.customers || []).map(c => c.username === username ? { ...c, expectedTime: parseInt(time) } : c)
       };
     }));
 
@@ -479,9 +485,9 @@ function App() {
 
     setQueues(currentQueues => currentQueues.map(q => {
       if (q._id !== id) return q;
-      const updatedQ = { ...q, customers: [...q.customers] };
+      const updatedQ = { ...q, customers: [...(q.customers || [])] };
       
-      if (action === 'next') {
+      if (action === 'next' && updatedQ.customers.length > 0) {
         updatedQ.customers.shift();
         updatedQ.totalServed = (updatedQ.totalServed || 0) + 1;
       } else if (action === 'remove' || action === 'leave') {
@@ -502,6 +508,7 @@ function App() {
       });
       if (action === 'join') setJoinNotes(prev => ({ ...prev, [id]: '' }));
     } catch (err) {
+      console.error(err);
     } finally {
       await fetchQueues(); 
       setProcessingActionId(null); 
@@ -531,7 +538,7 @@ function App() {
       return getDist(a) - getDist(b);
     });
   } else if (sortBy === "name") {
-    filteredQueues.sort((a, b) => a.name.localeCompare(b.name));
+    filteredQueues.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }
 
 
@@ -559,7 +566,6 @@ function App() {
       {!currentUser ? (
         <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', flexGrow: 1, padding: '2rem 0' }}>
           
-          {/* FANCY DESCRIPTIVE BLOCK */}
           <div className="animate-slide-up" style={{ textAlign: 'center', marginBottom: '3rem', maxWidth: '600px' }}>
             <h1 className="animate-gradient-text animate-float" style={{ fontSize: '4.5rem', fontWeight: 800, marginBottom: '0.5rem', letterSpacing: '-0.05em' }}>
               QueueSys.
@@ -716,9 +722,9 @@ function App() {
                   </div>
 
                   <div className="input-group" style={{ marginBottom: 0 }}>
-                    <label className="input-label" style={{ display: 'flex', justify-content: 'space-between' }}>
+                    <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span>Location (Address & Coordinates)</span>
-                      <a href="https://www.google.com/maps" target="_blank" rel="noreferrer" style={{ fontSize: '0.75rem', color: 'var(--text-main)', textDecoration: 'underline' }}>Open Google Maps</a>
+                      <a href="https://maps.google.com" target="_blank" rel="noreferrer" style={{ fontSize: '0.75rem', color: 'var(--text-main)', textDecoration: 'underline' }}>Open Maps</a>
                     </label>
                     <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -841,7 +847,7 @@ function App() {
                           <div className="input-group">
                             <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
                               <span>Location (Address & Coordinates)</span>
-                              <a href="https://www.google.com/maps" target="_blank" rel="noreferrer" style={{ fontSize: '0.75rem', color: 'var(--text-main)', textDecoration: 'underline' }}>Open Google Maps</a>
+                              <a href="https://maps.google.com" target="_blank" rel="noreferrer" style={{ fontSize: '0.75rem', color: 'var(--text-main)', textDecoration: 'underline' }}>Open Maps</a>
                             </label>
                             <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
                               <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -856,7 +862,7 @@ function App() {
                                     } else {
                                       setEditingQueue({ 
                                         ...editingQueue, 
-                                        location: { ...editingQueue.location, address: val } 
+                                        location: { ...(editingQueue.location || {}), address: val } 
                                       });
                                     }
                                   }}
@@ -875,7 +881,7 @@ function App() {
                                   className="premium-input text-sm"
                                   placeholder="Latitude"
                                   value={editingQueue.location?.lat ?? ''}
-                                  onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...editingQueue.location, lat: e.target.value ? parseFloat(e.target.value) : null } })}
+                                  onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...(editingQueue.location || {}), lat: e.target.value ? parseFloat(e.target.value) : null } })}
                                   disabled={processingActionId === queue._id}
                                 />
                                 <input
@@ -883,7 +889,7 @@ function App() {
                                   className="premium-input text-sm"
                                   placeholder="Longitude"
                                   value={editingQueue.location?.lng ?? ''}
-                                  onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...editingQueue.location, lng: e.target.value ? parseFloat(e.target.value) : null } })}
+                                  onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...(editingQueue.location || {}), lng: e.target.value ? parseFloat(e.target.value) : null } })}
                                   disabled={processingActionId === queue._id}
                                 />
                               </div>
@@ -961,7 +967,7 @@ function App() {
                         </div>
                         
                         <div className="card-body" style={{ padding: 0, overflowY: 'auto', maxHeight: '300px' }}>
-                          {queue.customers.length === 0 ? (
+                          {!queue.customers || queue.customers.length === 0 ? (
                             <div style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-light)' }}>
                               <Users size={32} style={{ marginBottom: '0.5rem', opacity: 0.5 }}/>
                               <p className="text-sm">Queue is empty</p>
@@ -1071,7 +1077,7 @@ function App() {
                         <div className="card-footer">
                           <button 
                             className="btn btn-primary" style={{ flexGrow: 1 }}
-                            disabled={queue.customers.length === 0 || processingActionId === queue._id}
+                            disabled={!queue.customers || queue.customers.length === 0 || processingActionId === queue._id}
                             onClick={() => performQueueAction(queue._id, 'next')}
                           >
                             {processingActionId === queue._id ? <><Loader2 size={16} className="animate-spin" /> Calling...</> : 'Call Next'}
@@ -1166,15 +1172,16 @@ function App() {
                 )}
                 
                 {filteredQueues.map((queue, idx) => {
-                  const myPos = queue.customers.findIndex(c => c.username === currentUser.username);
+                  const customersArray = queue.customers || [];
+                  const myPos = customersArray.findIndex(c => c.username === currentUser.username);
                   const inQueue = myPos !== -1;
                   
-                  const totalQueueWait = queue.customers.reduce((sum, c) => sum + (c.expectedTime || 0), 0);
+                  const totalQueueWait = customersArray.reduce((sum, c) => sum + (c.expectedTime || 0), 0);
 
                   let estimatedWait = 0;
                   if (myPos > 0) {
                     for (let i = 0; i < myPos; i++) {
-                      estimatedWait += queue.customers[i].expectedTime || 0;
+                      estimatedWait += customersArray[i].expectedTime || 0;
                     }
                   }
 
@@ -1185,7 +1192,7 @@ function App() {
                   return (
                     <div key={queue._id} className="animate-slide-up" style={{ display: 'flex', height: '100%', flexDirection: 'column', animationDelay: `${(idx % 5) * 0.1}s` }}>
                       <div 
-                        className="h-100 overflow-hidden d-flex flex-column premium-card" 
+                        className="premium-card" 
                         style={{
                           transition: 'all 0.3s ease',
                           boxShadow: myPos === 0 ? '0 0 0 4px rgba(16, 185, 129, 0.2)' : '0 4px 20px rgba(0,0,0,0.04)',
@@ -1195,6 +1202,7 @@ function App() {
                           background: '#fff',
                           display: 'flex',
                           flexDirection: 'column',
+                          height: '100%',
                           opacity: processingActionId === queue._id ? 0.7 : 1
                         }}
                       >
@@ -1208,7 +1216,7 @@ function App() {
                         {/* 2. IMAGE HERO WITH GRADIENT */}
                         {queue.image ? (
                           <div style={{ height: '160px', width: '100%', position: 'relative' }}>
-                            <img src={queue.image} alt={queue.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <img src={queue.image} alt={queue.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderTopLeftRadius: '15px', borderTopRightRadius: '15px' }} />
                             <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '70%', background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%)' }}></div>
                             
                             {inQueue && <span style={{ position: 'absolute', top: '12px', right: '12px', background: '#fff', color: '#000', padding: '4px 12px', borderRadius: '99px', fontSize: '0.75rem', fontWeight: '600', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>Joined</span>}
@@ -1258,7 +1266,7 @@ function App() {
                                 const query = queue.location.lat && queue.location.lng 
                                   ? `${queue.location.lat},${queue.location.lng}` 
                                   : encodeURIComponent(queue.location.address);
-                                window.open(`https://www.google.com/maps/search/?api=1&query=${query}`, '_blank');
+                                window.open(`https://maps.google.com/?q=${query}`, '_blank');
                               }}
                             >
                               <MapPin size={16} style={{ flexShrink: 0, marginTop: '2px', color: '#10b981' }} />
@@ -1282,7 +1290,7 @@ function App() {
                               <div style={{ color: '#71717a', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '700' }}>
                                 <Users size={12} /> Waiting
                               </div>
-                              <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color: '#18181b', lineHeight: 1 }}>{queue.customers.length}</div>
+                              <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color: '#18181b', lineHeight: 1 }}>{customersArray.length}</div>
                             </div>
                             <div style={{ padding: '0.75rem', borderRadius: '8px', background: '#f8f9fa', border: '1px solid #f1f3f5' }}>
                               <div style={{ color: '#71717a', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '700' }}>
