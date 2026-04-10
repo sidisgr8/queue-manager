@@ -10,13 +10,10 @@ const API_URL = "http://localhost:5000/api";
 
 function App() {
   const [queues, setQueues] = useState([]);
-  
-  // Initialize user from LocalStorage to keep them logged in
   const [currentUser, setCurrentUser] = useState(() => {
     const savedUser = localStorage.getItem('queueManagerUser');
     return savedUser ? JSON.parse(savedUser) : null;
   });
-
   const [authMode, setAuthMode] = useState("login"); 
   const [notification, setNotification] = useState("");
   
@@ -28,28 +25,9 @@ function App() {
   const [editingCustomerTime, setEditingCustomerTime] = useState(null); 
   const [notifiedQueues, setNotifiedQueues] = useState([]);
 
+  // --- NEW LOADING STATES ---
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [processingActionId, setProcessingActionId] = useState(null); 
-
-  // --- REAL-TIME COUNTDOWN STATE ---
-  const [now, setNow] = useState(Date.now());
-
-  // Update the 'now' state every 10 seconds to drive the live countdowns
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 10000); 
-    return () => clearInterval(interval);
-  }, []);
-
-  // Helpers to calculate remaining time dynamically
-  const getRawRemainingTime = (customer) => {
-    if (!customer.updatedAt) return customer.expectedTime || 0;
-    const elapsedMinutes = Math.floor((now - new Date(customer.updatedAt).getTime()) / 60000);
-    return (customer.expectedTime || 0) - elapsedMinutes;
-  };
-
-  const getRemainingTime = (customer) => {
-    return Math.max(0, getRawRemainingTime(customer));
-  };
 
   const showNotification = (message) => {
     setNotification(message);
@@ -82,20 +60,24 @@ function App() {
     } catch (err) {
       console.error("Failed to fetch queues");
     } finally {
-      if (isInitial) setIsInitialLoading(false);
+      if (isInitial) {
+        setIsInitialLoading(false);
+      }
     }
   };
 
+  // Only run the initial loading state once when the app mounts
   useEffect(() => {
     fetchQueues(true);
   }, []);
 
-  useEffect(() => {
-    if (!editingQueue && !editingCustomerTime && !processingActionId) {
-      const interval = setInterval(() => fetchQueues(false), 5000); 
-      return () => clearInterval(interval);
-    }
-  }, [editingQueue, editingCustomerTime, processingActionId]);
+// Update your polling effect to respect the lock
+useEffect(() => {
+  if (!editingQueue && !editingCustomerTime && !processingActionId) {
+    const interval = setInterval(() => fetchQueues(false), 5000); 
+    return () => clearInterval(interval);
+  }
+}, [editingQueue, editingCustomerTime, processingActionId]);
 
   useEffect(() => {
     if (currentUser?.role === 'customer') {
@@ -104,6 +86,7 @@ function App() {
 
       queues.forEach(q => {
         const myPos = q.customers.findIndex(c => c.username === currentUser.username);
+        
         if (myPos === 0 && !notifiedQueues.includes(q._id)) {
           showNotification(`It's your turn in ${q.name}! Please proceed.`);
           newNotified.push(q._id);
@@ -114,9 +97,12 @@ function App() {
         }
       });
 
-      if (changed) setNotifiedQueues(newNotified);
+      if (changed) {
+        setNotifiedQueues(newNotified);
+      }
     }
   }, [queues, currentUser, notifiedQueues]);
+
 
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -126,7 +112,7 @@ function App() {
       return;
     }
 
-    setProcessingActionId('auth'); 
+    setProcessingActionId('auth'); // Lock auth form
     const endpoint = authMode === "register" ? "/auth/register" : "/auth/login";
     try {
       const res = await fetch(`${API_URL}${endpoint}`, {
@@ -148,7 +134,7 @@ function App() {
         setAuthForm({ ...authForm, password: "" });
       } else {
         setCurrentUser(data);
-        localStorage.setItem('queueManagerUser', JSON.stringify(data)); // Save to local storage
+        localStorage.setItem('queueManagerUser', JSON.stringify(data));
         showNotification(`Welcome, ${data.username}!`);
       }
     } catch (err) {
@@ -160,7 +146,7 @@ function App() {
 
   const handleLogout = () => {
     setCurrentUser(null);
-    localStorage.removeItem('queueManagerUser'); // Clear local storage
+    localStorage.removeItem('queueManagerUser');
     setAuthForm({ username: "", password: "", role: "customer" });
     setSearchQuery("");
   };
@@ -219,12 +205,11 @@ function App() {
     if (!time || isNaN(time)) return;
     setProcessingActionId(queueId);
 
-    // Optimistic Update including the new updatedAt timestamp
     setQueues(current => current.map(q => {
       if (q._id !== queueId) return q;
       return {
         ...q,
-        customers: q.customers.map(c => c.username === username ? { ...c, expectedTime: parseInt(time), updatedAt: new Date().toISOString() } : c)
+        customers: q.customers.map(c => c.username === username ? { ...c, expectedTime: parseInt(time) } : c)
       };
     }));
 
@@ -266,45 +251,51 @@ function App() {
     }
   };
 
-  const performQueueAction = async (id, action, targetUsername = null) => {
-    const username = targetUsername || currentUser.username;
-    setProcessingActionId(id);
+const performQueueAction = async (id, action, targetUsername = null) => {
+  const username = targetUsername || currentUser.username;
+  
+  // 1. Lock the button and pause polling to prevent glitchy UI refreshes
+  setProcessingActionId(id);
 
-    setQueues(currentQueues => currentQueues.map(q => {
-      if (q._id !== id) return q;
-      const updatedQ = { ...q, customers: [...q.customers] };
-      
-      if (action === 'next') {
-        updatedQ.customers.shift();
-      } else if (action === 'remove' || action === 'leave') {
-        updatedQ.customers = updatedQ.customers.filter(c => c.username !== username);
-      } else if (action === 'join') {
-        if (!updatedQ.customers.some(c => c.username === username) && updatedQ.status === 'active') {
-          // Include timestamp on optimistic join
-          updatedQ.customers.push({ username, expectedTime: updatedQ.avgTime, updatedAt: new Date().toISOString() });
-        }
+  // 2. OPTIMISTIC UPDATE: Update the UI state immediately
+  setQueues(currentQueues => currentQueues.map(q => {
+    if (q._id !== id) return q;
+    const updatedQ = { ...q, customers: [...q.customers] };
+    
+    if (action === 'next') {
+      updatedQ.customers.shift();
+    } else if (action === 'remove' || action === 'leave') {
+      updatedQ.customers = updatedQ.customers.filter(c => c.username !== username);
+    } else if (action === 'join') {
+      if (!updatedQ.customers.some(c => c.username === username) && updatedQ.status === 'active') {
+        updatedQ.customers.push({ username, expectedTime: updatedQ.avgTime });
       }
-      return updatedQ;
-    }));
-
-    try {
-      await fetch(`${API_URL}/queues/${id}/action`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, username }),
-      });
-    } catch (err) {
-    } finally {
-      await fetchQueues(); 
-      setProcessingActionId(null); 
     }
-  };
+    return updatedQ;
+  }));
+
+  try {
+    // 3. Perform the actual network request
+    await fetch(`${API_URL}/queues/${id}/action`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, username }),
+    });
+  } catch (err) {
+    showNotification("Connection error. Re-syncing...");
+  } finally {
+    // 4. Re-fetch from server to ensure source of truth and release the lock
+    await fetchQueues(); 
+    setProcessingActionId(null); 
+  }
+};
 
   const filteredQueues = queues.filter(q => 
     q.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     q.manager.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // --- INITIAL LOADING SCREEN ---
   if (isInitialLoading) {
     return (
       <div className="app-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
@@ -318,6 +309,8 @@ function App() {
 
   return (
     <div className="app-container">
+      
+      {/* Toast Notification */}
       {notification && (
         <div className="toast-notification">
           <BellRing size={18} />
@@ -326,6 +319,7 @@ function App() {
       )}
 
       {!currentUser ? (
+        // --- LOGIN / REGISTER UI ---
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexGrow: 1 }} className="animate-fade-in">
           <div className="premium-card" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem' }}>
             <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
@@ -408,6 +402,7 @@ function App() {
           </div>
         </div>
       ) : (
+        // --- MAIN DASHBOARD UI ---
         <div className="animate-fade-in">
           <header className="app-header">
             <h1 className="brand">QueueSys.</h1>
@@ -480,6 +475,7 @@ function App() {
                 {queues.filter(q => q.manager === currentUser.username).map(queue => (
                   <div key={queue._id} className="animate-fade-in" style={{ display: 'flex', height: '100%' }}>
                     
+                    {/* EDIT MODE */}
                     {editingQueue && editingQueue._id === queue._id ? (
                       <div className="premium-card" style={{ width: '100%' }}>
                         <div className="card-header">
@@ -537,6 +533,7 @@ function App() {
 
                     ) : (
 
+                      // NORMAL MANAGER CARD VIEW
                       <div className="premium-card" style={{ width: '100%' }}>
                         {queue.image && (
                           <div style={{ height: '140px', width: '100%', borderBottom: '1px solid var(--border)' }}>
@@ -607,13 +604,12 @@ function App() {
                                         className="time-editor-trigger" 
                                         onClick={() => {
                                           if(processingActionId !== queue._id) {
-                                            // When manager edits, show the remaining time in the input
-                                            setEditingCustomerTime({ queueId: queue._id, username: c.username, time: getRemainingTime(c) })
+                                            setEditingCustomerTime({ queueId: queue._id, username: c.username, time: c.expectedTime })
                                           }
                                         }}
                                         style={{ opacity: processingActionId === queue._id ? 0.5 : 1 }}
                                       >
-                                        <span className="text-sm font-medium">{getRemainingTime(c)}m</span>
+                                        <span className="text-sm font-medium">{c.expectedTime}m</span>
                                         <PencilLine size={12} className="text-muted" />
                                       </div>
                                     )}
@@ -695,14 +691,12 @@ function App() {
                   const myPos = queue.customers.findIndex(c => c.username === currentUser.username);
                   const inQueue = myPos !== -1;
                   
-                  // Total queue wait dynamically sums remaining positive times
-                  const totalQueueWait = queue.customers.reduce((sum, c) => sum + getRemainingTime(c), 0);
+                  const totalQueueWait = queue.customers.reduce((sum, c) => sum + (c.expectedTime || 0), 0);
 
-                  // Estimated wait sums the exact raw remaining times of everyone ahead
                   let estimatedWait = 0;
                   if (myPos > 0) {
                     for (let i = 0; i < myPos; i++) {
-                      estimatedWait += getRawRemainingTime(queue.customers[i]);
+                      estimatedWait += queue.customers[i].expectedTime || 0;
                     }
                   }
                   
@@ -722,12 +716,14 @@ function App() {
                           opacity: processingActionId === queue._id ? 0.7 : 1
                         }}
                       >
+                        {/* 1. TURN BANNER */}
                         {myPos === 0 && (
                           <div className="animate-fade-in" style={{ background: '#10b981', color: 'white', padding: '10px', textAlign: 'center', fontWeight: '600', fontSize: '0.8rem', letterSpacing: '1px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                             <CheckCircle size={16} /> YOUR TURN
                           </div>
                         )}
 
+                        {/* 2. IMAGE HERO WITH GRADIENT */}
                         {queue.image ? (
                           <div style={{ height: '160px', width: '100%', position: 'relative' }}>
                             <img src={queue.image} alt={queue.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -745,6 +741,7 @@ function App() {
                           </div>
                         )}
 
+                        {/* 3. CARD BODY & STATS */}
                         <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
                           
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -757,6 +754,7 @@ function App() {
                             </div>
                           </div>
                           
+                          {/* Modern Stat Boxes */}
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.5rem' }}>
                             <div style={{ padding: '0.75rem', borderRadius: '8px', background: '#f8f9fa', border: '1px solid #f1f3f5' }}>
                               <div style={{ color: '#71717a', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '700' }}>
@@ -772,6 +770,7 @@ function App() {
                             </div>
                           </div>
 
+                          {/* 4. ACTION AREA */}
                           <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid #eaeaea' }}>
                             {inQueue ? (
                               <div className="animate-fade-in" style={{ textAlign: 'center', paddingTop: '0.5rem' }}>
@@ -787,16 +786,7 @@ function App() {
                                       <div style={{ width: '1px', height: '40px', background: '#e4e4e7' }}></div>
                                       <div>
                                         <div style={{ color: '#71717a', fontSize: '0.75rem', fontWeight: '500', marginBottom: '0.25rem' }}>Est. Wait</div>
-                                        {/* SHOW MESSAGE IF TIME RUNS OUT */}
-                                        {estimatedWait <= 0 ? (
-                                          <div style={{ fontSize: '0.85rem', fontWeight: '600', color: '#f59e0b', maxWidth: '120px', lineHeight: 1.2 }}>
-                                            Please wait, you will be called soon.
-                                          </div>
-                                        ) : (
-                                          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#18181b', lineHeight: 1 }}>
-                                            {estimatedWait}<span style={{ fontSize: '1.25rem', color: '#71717a', fontWeight: 'normal', marginLeft: '2px' }}>m</span>
-                                          </div>
-                                        )}
+                                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#18181b', lineHeight: 1 }}>{estimatedWait}<span style={{ fontSize: '1.25rem', color: '#71717a', fontWeight: 'normal', marginLeft: '2px' }}>m</span></div>
                                       </div>
                                     </>
                                   )}
