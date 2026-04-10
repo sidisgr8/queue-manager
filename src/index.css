@@ -257,7 +257,7 @@ p { margin: 0; }
   position: absolute;
   top: -5%; left: -5%; right: -5%; bottom: -5%;
   /* 👇 CHANGE THIS TO YOUR EXACT FILE NAME IN THE PUBLIC FOLDER 👇 */
-  background-image: url('/bg-image.jpg'); 
+  background-image: url('/bg-image.webp'); 
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
