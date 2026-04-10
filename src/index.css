@@ -191,3 +191,12 @@ p { margin: 0; }
   .form-grid > * { min-width: 100%; }
   .form-grid .btn-wrapper { flex: 1 1 100%; }
 }
+
+/* --- LOADING ANIMATIONS --- */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}

@@ -3,7 +3,7 @@ import {
   BellRing, LogOut, CheckCircle2, Search, Trash2, 
   PencilLine, Play, Pause, Users, Clock, ArrowRight,
   Image as ImageIcon, User, Lock, ArrowRightCircle,
-  UserCircle, CheckCircle
+  UserCircle, CheckCircle, Loader2
 } from "lucide-react";
 
 const API_URL = "http://localhost:5000/api";
@@ -21,6 +21,10 @@ function App() {
   const [editingQueue, setEditingQueue] = useState(null);
   const [editingCustomerTime, setEditingCustomerTime] = useState(null); 
   const [notifiedQueues, setNotifiedQueues] = useState([]);
+
+  // --- NEW LOADING STATES ---
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [processingActionId, setProcessingActionId] = useState(null); 
 
   const showNotification = (message) => {
     setNotification(message);
@@ -45,23 +49,32 @@ function App() {
     }
   };
 
-  const fetchQueues = async () => {
+  const fetchQueues = async (isInitial = false) => {
     try {
       const res = await fetch(`${API_URL}/queues`);
       const data = await res.json();
       setQueues(data);
     } catch (err) {
       console.error("Failed to fetch queues");
+    } finally {
+      if (isInitial) {
+        setIsInitialLoading(false);
+      }
     }
   };
 
+  // Only run the initial loading state once when the app mounts
   useEffect(() => {
-    fetchQueues();
-    if (!editingQueue && !editingCustomerTime) {
-      const interval = setInterval(fetchQueues, 5000); 
+    fetchQueues(true);
+  }, []);
+
+  // UPDATED: Pause polling if we are editing OR processing an action to prevent race conditions
+  useEffect(() => {
+    if (!editingQueue && !editingCustomerTime && !processingActionId) {
+      const interval = setInterval(() => fetchQueues(false), 5000); 
       return () => clearInterval(interval);
     }
-  }, [editingQueue, editingCustomerTime]);
+  }, [editingQueue, editingCustomerTime, processingActionId]);
 
   useEffect(() => {
     if (currentUser?.role === 'customer') {
@@ -96,6 +109,7 @@ function App() {
       return;
     }
 
+    setProcessingActionId('auth'); // Lock auth form
     const endpoint = authMode === "register" ? "/auth/register" : "/auth/login";
     try {
       const res = await fetch(`${API_URL}${endpoint}`, {
@@ -105,7 +119,11 @@ function App() {
       });
       const data = await res.json();
 
-      if (!res.ok) return showNotification(data.error || "An error occurred");
+      if (!res.ok) {
+        showNotification(data.error || "An error occurred");
+        setProcessingActionId(null);
+        return;
+      }
 
       if (authMode === "register") {
         showNotification("Account created. Please log in.");
@@ -117,6 +135,8 @@ function App() {
       }
     } catch (err) {
       showNotification("Server connection failed.");
+    } finally {
+      setProcessingActionId(null);
     }
   };
 
@@ -129,6 +149,8 @@ function App() {
   const createQueue = async (e) => {
     e.preventDefault();
     if (!newQueue.name.trim()) return;
+    
+    setProcessingActionId('create');
     try {
       await fetch(`${API_URL}/queues`, {
         method: "POST",
@@ -143,14 +165,17 @@ function App() {
       setNewQueue({ name: "", avgTime: 5, image: "" });
       document.getElementById("createQueueFileInput").value = "";
       showNotification("Queue created successfully.");
-      fetchQueues();
+      await fetchQueues();
     } catch (err) {
       showNotification("Failed to create queue.");
+    } finally {
+      setProcessingActionId(null);
     }
   };
 
   const updateQueueDetails = async (e) => {
     e.preventDefault();
+    setProcessingActionId(editingQueue._id);
     try {
       await fetch(`${API_URL}/queues/${editingQueue._id}`, {
         method: "PUT",
@@ -163,49 +188,117 @@ function App() {
       });
       setEditingQueue(null);
       showNotification("Queue updated.");
-      fetchQueues();
+      await fetchQueues();
     } catch (err) {
       showNotification("Failed to update queue.");
+    } finally {
+      setProcessingActionId(null);
     }
   };
 
   const updateCustomerTime = async (queueId, username, time) => {
     if (!time || isNaN(time)) return;
+    setProcessingActionId(queueId);
+
+    setQueues(current => current.map(q => {
+      if (q._id !== queueId) return q;
+      return {
+        ...q,
+        customers: q.customers.map(c => c.username === username ? { ...c, expectedTime: parseInt(time) } : c)
+      };
+    }));
+
     try {
       await fetch(`${API_URL}/queues/${queueId}/customer-time`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, expectedTime: parseInt(time) }),
       });
-      fetchQueues();
     } catch (err) {
       showNotification("Failed to update time.");
+    } finally {
+      await fetchQueues();
+      setProcessingActionId(null);
     }
   };
 
   const deleteQueue = async (id) => {
-    await fetch(`${API_URL}/queues/${id}`, { method: "DELETE" });
-    fetchQueues();
+    setProcessingActionId(id);
+    try {
+      setQueues(current => current.filter(q => q._id !== id));
+      await fetch(`${API_URL}/queues/${id}`, { method: "DELETE" });
+    } finally {
+      await fetchQueues();
+      setProcessingActionId(null);
+    }
   };
 
   const toggleQueueStatus = async (id) => {
-    await fetch(`${API_URL}/queues/${id}/status`, { method: "PUT" });
-    fetchQueues();
+    setProcessingActionId(id);
+    try {
+      setQueues(current => current.map(q => 
+        q._id === id ? { ...q, status: q.status === 'active' ? 'paused' : 'active' } : q
+      ));
+      await fetch(`${API_URL}/queues/${id}/status`, { method: "PUT" });
+    } finally {
+      await fetchQueues();
+      setProcessingActionId(null);
+    }
   };
 
   const performQueueAction = async (id, action, targetUsername = null) => {
-    await fetch(`${API_URL}/queues/${id}/action`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, username: targetUsername || currentUser.username }),
-    });
-    fetchQueues();
+    const username = targetUsername || currentUser.username;
+    
+    // Set processing to lock the button and pause polling
+    setProcessingActionId(id);
+
+    // OPTIMISTIC UPDATE: Instant UI response
+    setQueues(currentQueues => currentQueues.map(q => {
+      if (q._id !== id) return q;
+      const updatedQ = { ...q, customers: [...q.customers] };
+      
+      if (action === 'next') {
+        updatedQ.customers.shift();
+      } else if (action === 'remove' || action === 'leave') {
+        updatedQ.customers = updatedQ.customers.filter(c => c.username !== username);
+      } else if (action === 'join') {
+        if (!updatedQ.customers.some(c => c.username === username) && updatedQ.status === 'active') {
+          updatedQ.customers.push({ username, expectedTime: updatedQ.avgTime });
+        }
+      }
+      return updatedQ;
+    }));
+
+    try {
+      await fetch(`${API_URL}/queues/${id}/action`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, username }),
+      });
+    } catch (err) {
+      // Ignore error internally, the fetchQueues below will revert the optimistic update
+    } finally {
+      await fetchQueues(); 
+      setProcessingActionId(null); // Release the lock
+    }
   };
 
   const filteredQueues = queues.filter(q => 
     q.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     q.manager.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // --- INITIAL LOADING SCREEN ---
+  if (isInitialLoading) {
+    return (
+      <div className="app-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', color: 'var(--text-muted)' }}>
+          <Loader2 size={36} className="animate-spin" style={{ color: 'var(--text-main)' }} />
+          <div style={{ fontWeight: 500, letterSpacing: '0.5px' }}>Loading QueueSys...</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -241,6 +334,7 @@ function App() {
                     value={authForm.username}
                     onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
                     required
+                    disabled={processingActionId === 'auth'}
                   />
                 </div>
               </div>
@@ -256,6 +350,7 @@ function App() {
                     value={authForm.password}
                     onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
                     required
+                    disabled={processingActionId === 'auth'}
                   />
                 </div>
               </div>
@@ -267,6 +362,7 @@ function App() {
                     className="premium-input"
                     value={authForm.role}
                     onChange={(e) => setAuthForm({ ...authForm, role: e.target.value })}
+                    disabled={processingActionId === 'auth'}
                   >
                     <option value="customer">Customer</option>
                     <option value="manager">Manager</option>
@@ -274,9 +370,12 @@ function App() {
                 </div>
               )}
 
-              <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.875rem' }}>
-                {authMode === 'login' ? 'Sign In' : 'Create Account'}
-                <ArrowRight size={18} />
+              <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.875rem' }} disabled={processingActionId === 'auth'}>
+                {processingActionId === 'auth' ? (
+                  <><Loader2 size={18} className="animate-spin" /> Processing...</>
+                ) : (
+                  <>{authMode === 'login' ? 'Sign In' : 'Create Account'} <ArrowRight size={18} /></>
+                )}
               </button>
             </form>
 
@@ -288,6 +387,7 @@ function App() {
                   setAuthMode(authMode === 'login' ? 'register' : 'login');
                   setNotification("");
                 }}
+                disabled={processingActionId === 'auth'}
               >
                 {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Sign in'}
               </button>
@@ -324,6 +424,7 @@ function App() {
                       value={newQueue.name}
                       onChange={(e) => setNewQueue({ ...newQueue, name: e.target.value })}
                       required
+                      disabled={processingActionId === 'create'}
                     />
                   </div>
                   <div className="input-group" style={{ marginBottom: 0 }}>
@@ -335,6 +436,7 @@ function App() {
                       className="premium-input"
                       style={{ padding: '0.6rem 1rem' }}
                       onChange={handleImageUpload}
+                      disabled={processingActionId === 'create'}
                     />
                   </div>
                   <div className="input-group" style={{ marginBottom: 0 }}>
@@ -346,10 +448,13 @@ function App() {
                       value={newQueue.avgTime}
                       onChange={(e) => setNewQueue({ ...newQueue, avgTime: e.target.value })}
                       required
+                      disabled={processingActionId === 'create'}
                     />
                   </div>
                   <div className="btn-wrapper">
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%', height: '42px' }}>Create</button>
+                    <button type="submit" className="btn btn-primary" style={{ width: '100%', height: '42px' }} disabled={processingActionId === 'create'}>
+                      {processingActionId === 'create' ? <Loader2 size={18} className="animate-spin" /> : 'Create'}
+                    </button>
                   </div>
                 </form>
               </div>
@@ -377,6 +482,7 @@ function App() {
                               value={editingQueue.name} 
                               onChange={(e) => setEditingQueue({...editingQueue, name: e.target.value})} 
                               required
+                              disabled={processingActionId === queue._id}
                             />
                           </div>
                           <div className="input-group">
@@ -387,6 +493,7 @@ function App() {
                               value={editingQueue.avgTime} 
                               onChange={(e) => setEditingQueue({...editingQueue, avgTime: e.target.value})} 
                               required
+                              disabled={processingActionId === queue._id}
                             />
                           </div>
                           <div className="input-group" style={{ marginBottom: 'auto' }}>
@@ -395,20 +502,24 @@ function App() {
                               type="file" accept="image/*" 
                               className="premium-input" style={{ padding: '0.6rem 1rem' }}
                               onChange={handleEditImageUpload} 
+                              disabled={processingActionId === queue._id}
                             />
                             {editingQueue.image && (
                               <button 
                                 type="button" 
                                 className="btn-icon" style={{ alignSelf: 'flex-start', marginTop: '0.5rem', color: 'var(--accent-danger)' }}
                                 onClick={() => setEditingQueue({...editingQueue, image: ""})}
+                                disabled={processingActionId === queue._id}
                               >
                                 <Trash2 size={14} style={{ marginRight: '0.25rem' }}/> Remove Photo
                               </button>
                             )}
                           </div>
                           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1.5rem' }}>
-                            <button type="button" className="btn btn-outline" style={{ flex: 1 }} onClick={() => setEditingQueue(null)}>Cancel</button>
-                            <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Save</button>
+                            <button type="button" className="btn btn-outline" style={{ flex: 1 }} onClick={() => setEditingQueue(null)} disabled={processingActionId === queue._id}>Cancel</button>
+                            <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={processingActionId === queue._id}>
+                              {processingActionId === queue._id ? <Loader2 size={18} className="animate-spin" /> : 'Save'}
+                            </button>
                           </div>
                         </form>
                       </div>
@@ -430,6 +541,7 @@ function App() {
                               className="btn-icon"
                               onClick={() => toggleQueueStatus(queue._id)}
                               title={queue.status === 'active' ? 'Pause Queue' : 'Resume Queue'}
+                              disabled={processingActionId === queue._id}
                             >
                               {queue.status === 'active' ? <Pause size={18} /> : <Play size={18} />}
                             </button>
@@ -468,6 +580,7 @@ function App() {
                                         value={editingCustomerTime.time}
                                         onChange={(e) => setEditingCustomerTime({ ...editingCustomerTime, time: e.target.value })}
                                         autoFocus
+                                        disabled={processingActionId === queue._id}
                                         onBlur={() => {
                                           updateCustomerTime(queue._id, c.username, editingCustomerTime.time);
                                           setEditingCustomerTime(null);
@@ -482,7 +595,12 @@ function App() {
                                     ) : (
                                       <div 
                                         className="time-editor-trigger" 
-                                        onClick={() => setEditingCustomerTime({ queueId: queue._id, username: c.username, time: c.expectedTime })}
+                                        onClick={() => {
+                                          if(processingActionId !== queue._id) {
+                                            setEditingCustomerTime({ queueId: queue._id, username: c.username, time: c.expectedTime })
+                                          }
+                                        }}
+                                        style={{ opacity: processingActionId === queue._id ? 0.5 : 1 }}
                                       >
                                         <span className="text-sm font-medium">{c.expectedTime}m</span>
                                         <PencilLine size={12} className="text-muted" />
@@ -493,6 +611,7 @@ function App() {
                                       className="btn-icon" style={{ padding: '0.25rem' }}
                                       onClick={() => performQueueAction(queue._id, 'remove', c.username)}
                                       title="Remove User"
+                                      disabled={processingActionId === queue._id}
                                     >
                                       <Trash2 size={14} />
                                     </button>
@@ -506,20 +625,22 @@ function App() {
                         <div className="card-footer">
                           <button 
                             className="btn btn-primary" style={{ flexGrow: 1 }}
-                            disabled={queue.customers.length === 0}
+                            disabled={queue.customers.length === 0 || processingActionId === queue._id}
                             onClick={() => performQueueAction(queue._id, 'next')}
                           >
-                            Call Next
+                            {processingActionId === queue._id ? <><Loader2 size={16} className="animate-spin" /> Calling...</> : 'Call Next'}
                           </button>
                           <button 
                             className="btn btn-outline" style={{ padding: '0.75rem' }}
                             onClick={() => setEditingQueue(queue)} title="Edit Details"
+                            disabled={processingActionId === queue._id}
                           >
                             <PencilLine size={18} />
                           </button>
                           <button 
                             className="btn btn-danger" style={{ padding: '0.75rem' }}
                             onClick={() => deleteQueue(queue._id)} title="Delete Queue"
+                            disabled={processingActionId === queue._id}
                           >
                             <Trash2 size={18} />
                           </button>
@@ -584,7 +705,8 @@ function App() {
                           borderRadius: '16px',
                           background: '#fff',
                           display: 'flex',
-                          flexDirection: 'column'
+                          flexDirection: 'column',
+                          opacity: processingActionId === queue._id ? 0.7 : 1
                         }}
                       >
                         {/* 1. TURN BANNER */}
@@ -664,27 +786,35 @@ function App() {
                                 </div>
                                 
                                 {myPos === 0 && (
-                                  <div style={{ color: '#10b981', fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '1rem', letterSpacing: '0.5px' }}>It's your turn now.</div>
+                                  <div style={{ color: '#10b981', fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '1rem', letterSpacing: '0.5px' }}>Please approach the desk.</div>
                                 )}
                                 
                                 <button 
-                                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: '#fff', color: '#ef4444', border: '1px solid #fca5a5', padding: '10px', borderRadius: '8px', fontWeight: '600', transition: 'all 0.2s', cursor: 'pointer' }}
-                                  onMouseOver={(e) => { e.currentTarget.style.background = '#fef2f2'; }}
-                                  onMouseOut={(e) => { e.currentTarget.style.background = '#fff'; }}
+                                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: '#fff', color: '#ef4444', border: '1px solid #fca5a5', padding: '10px', borderRadius: '8px', fontWeight: '600', transition: 'all 0.2s', cursor: processingActionId === queue._id ? 'not-allowed' : 'pointer' }}
+                                  onMouseOver={(e) => { if(processingActionId !== queue._id) e.currentTarget.style.background = '#fef2f2'; }}
+                                  onMouseOut={(e) => { if(processingActionId !== queue._id) e.currentTarget.style.background = '#fff'; }}
                                   onClick={() => performQueueAction(queue._id, 'leave')}
+                                  disabled={processingActionId === queue._id}
                                 >
-                                  <LogOut size={16} /> Leave Queue
+                                  {processingActionId === queue._id ? <Loader2 size={16} className="animate-spin" /> : <LogOut size={16} />} 
+                                  {processingActionId === queue._id ? 'Processing...' : 'Leave Queue'}
                                 </button>
                               </div>
                             ) : (
                               <button 
-                                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginTop: '0.25rem', background: '#18181b', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: '500', opacity: queue.status === 'paused' ? 0.5 : 1, transition: 'all 0.2s', cursor: queue.status === 'paused' ? 'not-allowed' : 'pointer' }}
-                                onMouseOver={(e) => { if(queue.status !== 'paused') e.currentTarget.style.background = '#000'; }}
-                                onMouseOut={(e) => { if(queue.status !== 'paused') e.currentTarget.style.background = '#18181b'; }}
+                                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginTop: '0.25rem', background: '#18181b', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: '500', opacity: queue.status === 'paused' || processingActionId === queue._id ? 0.5 : 1, transition: 'all 0.2s', cursor: queue.status === 'paused' || processingActionId === queue._id ? 'not-allowed' : 'pointer' }}
+                                onMouseOver={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#000'; }}
+                                onMouseOut={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#18181b'; }}
                                 onClick={() => performQueueAction(queue._id, 'join')}
-                                disabled={queue.status === 'paused'}
+                                disabled={queue.status === 'paused' || processingActionId === queue._id}
                               >
-                                {queue.status === 'active' ? <><ArrowRight size={18} /> Join Queue</> : 'Queue Paused'}
+                                {processingActionId === queue._id ? (
+                                  <><Loader2 size={18} className="animate-spin" /> Processing...</>
+                                ) : queue.status === 'active' ? (
+                                  <><ArrowRight size={18} /> Join Queue</>
+                                ) : (
+                                  'Queue Paused'
+                                )}
                               </button>
                             )}
                           </div>
