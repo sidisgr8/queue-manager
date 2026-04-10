@@ -24,12 +24,21 @@ const queueSchema = new mongoose.Schema({
   name: { type: String, required: true },
   manager: { type: String, required: true },
   
-  // CHANGED: Now stores an array of objects to hold individual times
+  // NEW: Location details
+  location: {
+    address: { type: String, default: '' },
+    lat: { type: Number },
+    lng: { type: Number }
+  },
+
   customers: [{ 
     username: { type: String },
-    expectedTime: { type: Number } 
+    expectedTime: { type: Number },
+    updatedAt: { type: Date, default: Date.now },
+    note: { type: String, default: '' }
   }],
   
+  totalServed: { type: Number, default: 0 },
   status: { type: String, enum: ['active', 'paused'], default: 'active' },
   avgTime: { type: Number, default: 5 },
   image: { type: String } 
@@ -84,9 +93,10 @@ app.post('/api/queues', async (req, res) => {
 
 app.put('/api/queues/:id', async (req, res) => {
   try {
-    const { name, avgTime, image } = req.body;
+    const { name, avgTime, image, location } = req.body;
     const updateData = { name, avgTime };
     if (image !== undefined) updateData.image = image;
+    if (location !== undefined) updateData.location = location;
 
     const queue = await Queue.findByIdAndUpdate(
       req.params.id, 
@@ -141,27 +151,57 @@ app.put('/api/queues/:id/customer-time', async (req, res) => {
 
 app.put('/api/queues/:id/action', async (req, res) => {
   try {
-    const { action, username } = req.body;
+    const { action, username, note } = req.body;
     const queue = await Queue.findById(req.params.id);
 
+    if (!queue) {
+      return res.status(404).json({ error: 'Queue not found' });
+    }
+
     if (action === 'next') {
-      queue.customers.shift(); 
+      if (queue.customers.length > 0) {
+        queue.customers.shift();
+        queue.totalServed = (queue.totalServed || 0) + 1;
+      }
     } else if (action === 'remove' || action === 'leave') {
       queue.customers = queue.customers.filter(c => c.username !== username);
     } else if (action === 'join') {
       if (!queue.customers.some(c => c.username === username) && queue.status === 'active') {
-        queue.customers.push({ username, expectedTime: queue.avgTime });
+        queue.customers.push({ 
+          username, 
+          expectedTime: queue.avgTime, 
+          updatedAt: new Date(),
+          note: note || '' 
+        });
       }
     }
 
     await queue.save();
-    res.json(queue); // Always return updated queue for synchronization
+    res.json(queue);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // ... (rest of the file)
+
+// NEW ROUTE: Reorder the entire queue list (Drag & Drop / Move)
+app.put('/api/queues/:id/reorder', async (req, res) => {
+  try {
+    const { customers } = req.body;
+    const queue = await Queue.findById(req.params.id);
+    
+    if (!queue) return res.status(404).json({ error: 'Queue not found' });
+    
+    // Replace the existing customers array with the newly ordered one
+    queue.customers = customers;
+    
+    await queue.save();
+    res.json(queue);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

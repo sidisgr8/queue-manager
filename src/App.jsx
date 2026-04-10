@@ -3,10 +3,24 @@ import {
   BellRing, LogOut, CheckCircle2, Search, Trash2, 
   PencilLine, Play, Pause, Users, Clock, ArrowRight,
   Image as ImageIcon, User, Lock, ArrowRightCircle,
-  UserCircle, CheckCircle, Loader2
+  UserCircle, CheckCircle, Loader2, 
+  ChevronUp, ChevronDown, GripVertical, MapPin, Map
 } from "lucide-react";
 
 const API_URL = "http://localhost:5000/api";
+
+// Helper to calculate distance between two lat/lng pairs in kilometers
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return (R * c).toFixed(1);
+};
 
 function App() {
   const [queues, setQueues] = useState([]);
@@ -18,7 +32,7 @@ function App() {
   const [notification, setNotification] = useState("");
   
   const [authForm, setAuthForm] = useState({ username: "", password: "", role: "customer" });
-  const [newQueue, setNewQueue] = useState({ name: "", avgTime: 5, image: "" });
+  const [newQueue, setNewQueue] = useState({ name: "", avgTime: 5, image: "", address: "", lat: null, lng: null });
   const [searchQuery, setSearchQuery] = useState("");
 
   const [editingQueue, setEditingQueue] = useState(null);
@@ -28,10 +42,93 @@ function App() {
   // --- NEW LOADING STATES ---
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [processingActionId, setProcessingActionId] = useState(null); 
+  const [now, setNow] = useState(Date.now());
+  
+  // NEW: User's live location
+  const [userLocation, setUserLocation] = useState(null);
+  const [sortByNearest, setSortByNearest] = useState(false);
+
+  // NEW: Store notes typed by customers before joining
+  const [joinNotes, setJoinNotes] = useState({});
+
+  // --- NEW: DRAG & DROP AND REORDERING STATE ---
+  const [dragState, setDragState] = useState({ queueId: null, index: null });
+
+  const getRemainingTime = (customer) => customer.expectedTime || 0;
+
+  // Function to sync the newly ordered array with the backend
+  const handleReorder = async (queueId, newCustomersList) => {
+    setProcessingActionId(queueId);
+    
+    setQueues(current => current.map(q => 
+      q._id === queueId ? { ...q, customers: newCustomersList } : q
+    ));
+
+    try {
+      await fetch(`${API_URL}/queues/${queueId}/reorder`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customers: newCustomersList })
+      });
+    } catch (err) {
+      showNotification("Failed to save new queue order.");
+    } finally {
+      await fetchQueues();
+      setProcessingActionId(null);
+    }
+  };
+
+  // Drag & Drop Handlers
+  const onDragStart = (e, queueId, index) => {
+    setDragState({ queueId, index });
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const onDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  const onDrop = (e, targetQueueId, dropIndex) => {
+    e.preventDefault();
+    if (dragState.queueId !== targetQueueId || dragState.index === null) return;
+    if (dragState.index === dropIndex) return;
+
+    const queue = queues.find(q => q._id === targetQueueId);
+    const newCustomers = [...queue.customers];
+    const [draggedCustomer] = newCustomers.splice(dragState.index, 1);
+    newCustomers.splice(dropIndex, 0, draggedCustomer);
+    
+    handleReorder(targetQueueId, newCustomers);
+    setDragState({ queueId: null, index: null });
+  };
+
+  // Manual Arrow Handlers
+  const movePosition = (queueId, currentIndex, direction) => {
+    if (processingActionId === queueId) return;
+    
+    const queue = queues.find(q => q._id === queueId);
+    const newIndex = currentIndex + direction;
+    if (newIndex < 0 || newIndex >= queue.customers.length) return;
+
+    const newCustomers = [...queue.customers];
+    const temp = newCustomers[currentIndex];
+    newCustomers[currentIndex] = newCustomers[newIndex];
+    newCustomers[newIndex] = temp;
+
+    handleReorder(queueId, newCustomers);
+  };
 
   const showNotification = (message) => {
     setNotification(message);
     setTimeout(() => setNotification(""), 3000);
+  };
+
+  // NEW: Audio Notification Function
+  const playNotificationSound = () => {
+    try {
+      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+      audio.play().catch(e => console.log("Audio play blocked by browser interaction policies"));
+    } catch (err) {}
   };
 
   const handleImageUpload = (e) => {
@@ -49,6 +146,22 @@ function App() {
       const reader = new FileReader();
       reader.onloadend = () => setEditingQueue({ ...editingQueue, image: reader.result });
       reader.readAsDataURL(file);
+    }
+  };
+
+  const captureManagerLocation = (isEdit = false) => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (isEdit) {
+            setEditingQueue({ ...editingQueue, lat: pos.coords.latitude, lng: pos.coords.longitude });
+          } else {
+            setNewQueue({ ...newQueue, lat: pos.coords.latitude, lng: pos.coords.longitude });
+          }
+          showNotification("Location captured successfully!");
+        },
+        () => showNotification("Failed to get location.")
+      );
     }
   };
 
@@ -71,13 +184,28 @@ function App() {
     fetchQueues(true);
   }, []);
 
-// Update your polling effect to respect the lock
-useEffect(() => {
-  if (!editingQueue && !editingCustomerTime && !processingActionId) {
-    const interval = setInterval(() => fetchQueues(false), 5000); 
+  useEffect(() => {
+    if (currentUser?.role === 'customer') {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          () => console.log("Location access denied.")
+        );
+      }
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 10000);
     return () => clearInterval(interval);
-  }
-}, [editingQueue, editingCustomerTime, processingActionId]);
+  }, []);
+
+  useEffect(() => {
+    if (!editingQueue && !editingCustomerTime && !processingActionId) {
+      const interval = setInterval(() => fetchQueues(false), 5000); 
+      return () => clearInterval(interval);
+    }
+  }, [editingQueue, editingCustomerTime, processingActionId]);
 
   useEffect(() => {
     if (currentUser?.role === 'customer') {
@@ -89,6 +217,7 @@ useEffect(() => {
         
         if (myPos === 0 && !notifiedQueues.includes(q._id)) {
           showNotification(`It's your turn in ${q.name}! Please proceed.`);
+          playNotificationSound();
           newNotified.push(q._id);
           changed = true;
         } else if (myPos !== 0 && notifiedQueues.includes(q._id)) {
@@ -164,10 +293,11 @@ useEffect(() => {
           name: newQueue.name,
           manager: currentUser.username,
           avgTime: parseInt(newQueue.avgTime) || 5,
-          image: newQueue.image
+          image: newQueue.image,
+          location: { address: newQueue.address, lat: newQueue.lat, lng: newQueue.lng }
         }),
       });
-      setNewQueue({ name: "", avgTime: 5, image: "" });
+      setNewQueue({ name: "", avgTime: 5, image: "", address: "", lat: null, lng: null });
       document.getElementById("createQueueFileInput").value = "";
       showNotification("Queue created successfully.");
       await fetchQueues();
@@ -188,7 +318,12 @@ useEffect(() => {
         body: JSON.stringify({
           name: editingQueue.name,
           avgTime: parseInt(editingQueue.avgTime) || 5,
-          image: editingQueue.image
+          image: editingQueue.image,
+          location: {
+            address: editingQueue.address || editingQueue.location?.address || "",
+            lat: editingQueue.lat ?? editingQueue.location?.lat,
+            lng: editingQueue.lng ?? editingQueue.location?.lng
+          }
         }),
       });
       setEditingQueue(null);
@@ -251,40 +386,36 @@ useEffect(() => {
     }
   };
 
-const performQueueAction = async (id, action, targetUsername = null) => {
+const performQueueAction = async (id, action, targetUsername = null, note = '') => {
   const username = targetUsername || currentUser.username;
-  
-  // 1. Lock the button and pause polling to prevent glitchy UI refreshes
   setProcessingActionId(id);
 
-  // 2. OPTIMISTIC UPDATE: Update the UI state immediately
   setQueues(currentQueues => currentQueues.map(q => {
     if (q._id !== id) return q;
     const updatedQ = { ...q, customers: [...q.customers] };
     
     if (action === 'next') {
       updatedQ.customers.shift();
+      updatedQ.totalServed = (updatedQ.totalServed || 0) + 1;
     } else if (action === 'remove' || action === 'leave') {
       updatedQ.customers = updatedQ.customers.filter(c => c.username !== username);
     } else if (action === 'join') {
       if (!updatedQ.customers.some(c => c.username === username) && updatedQ.status === 'active') {
-        updatedQ.customers.push({ username, expectedTime: updatedQ.avgTime });
+        updatedQ.customers.push({ username, expectedTime: updatedQ.avgTime, updatedAt: new Date().toISOString(), note });
       }
     }
     return updatedQ;
   }));
 
   try {
-    // 3. Perform the actual network request
     await fetch(`${API_URL}/queues/${id}/action`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, username }),
+      body: JSON.stringify({ action, username, note }),
     });
+    if (action === 'join') setJoinNotes(prev => ({ ...prev, [id]: '' }));
   } catch (err) {
-    showNotification("Connection error. Re-syncing...");
   } finally {
-    // 4. Re-fetch from server to ensure source of truth and release the lock
     await fetchQueues(); 
     setProcessingActionId(null); 
   }
@@ -458,6 +589,21 @@ const performQueueAction = async (id, action, targetUsername = null) => {
                       disabled={processingActionId === 'create'}
                     />
                   </div>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label">Address (optional)</label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        className="premium-input"
+                        placeholder="123 Main St, City"
+                        value={newQueue.address}
+                        onChange={(e) => setNewQueue({ ...newQueue, address: e.target.value })}
+                        disabled={processingActionId === 'create'}
+                      />
+                      <button type="button" className="btn btn-outline" onClick={() => captureManagerLocation(false)} disabled={processingActionId === 'create'} style={{ padding: '0 0.75rem' }}>
+                        <MapPin size={18} />
+                      </button>
+                    </div>
+                  </div>
                   <div className="btn-wrapper">
                     <button type="submit" className="btn btn-primary" style={{ width: '100%', height: '42px' }} disabled={processingActionId === 'create'}>
                       {processingActionId === 'create' ? <Loader2 size={18} className="animate-spin" /> : 'Create'}
@@ -502,6 +648,21 @@ const performQueueAction = async (id, action, targetUsername = null) => {
                               required
                               disabled={processingActionId === queue._id}
                             />
+                          </div>
+                          <div className="input-group">
+                            <label className="input-label">Address (optional)</label>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <input 
+                                className="premium-input"
+                                placeholder="123 Main St, City"
+                                value={editingQueue.address || editingQueue.location?.address || ''}
+                                onChange={(e) => setEditingQueue({ ...editingQueue, address: e.target.value })}
+                                disabled={processingActionId === queue._id}
+                              />
+                              <button type="button" className="btn btn-outline" onClick={() => captureManagerLocation(true)} disabled={processingActionId === queue._id} style={{ padding: '0 0.75rem' }}>
+                                <MapPin size={18} />
+                              </button>
+                            </div>
                           </div>
                           <div className="input-group" style={{ marginBottom: 'auto' }}>
                             <label className="input-label">Cover Image</label>
@@ -561,6 +722,10 @@ const performQueueAction = async (id, action, targetUsername = null) => {
                               <Clock size={14} />
                               <span className="text-sm">Base: {queue.avgTime}m</span>
                             </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--text-muted)' }}>
+                              <CheckCircle2 size={14} />
+                              <span className="text-sm">Served: {queue.totalServed || 0}</span>
+                            </div>
                           </div>
                         </div>
                         
@@ -573,55 +738,99 @@ const performQueueAction = async (id, action, targetUsername = null) => {
                           ) : (
                             <ul className="customer-list">
                               {queue.customers.map((c, i) => (
-                                <li key={i} className="customer-item" style={{ paddingLeft: '1.5rem', paddingRight: '1.5rem' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                    <span className="text-muted text-sm" style={{ width: '20px' }}>{i + 1}.</span>
-                                    <span className={`text-sm ${i === 0 ? 'font-medium' : ''}`}>{c.username}</span>
-                                  </div>
-                                  
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    {editingCustomerTime?.queueId === queue._id && editingCustomerTime?.username === c.username ? (
-                                      <input 
-                                        type="number"
-                                        className="time-editor-input text-sm"
-                                        value={editingCustomerTime.time}
-                                        onChange={(e) => setEditingCustomerTime({ ...editingCustomerTime, time: e.target.value })}
-                                        autoFocus
-                                        disabled={processingActionId === queue._id}
-                                        onBlur={() => {
-                                          updateCustomerTime(queue._id, c.username, editingCustomerTime.time);
-                                          setEditingCustomerTime(null);
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
-                                            updateCustomerTime(queue._id, c.username, editingCustomerTime.time);
-                                            setEditingCustomerTime(null);
-                                          }
-                                        }}
-                                      />
-                                    ) : (
-                                      <div 
-                                        className="time-editor-trigger" 
-                                        onClick={() => {
-                                          if(processingActionId !== queue._id) {
-                                            setEditingCustomerTime({ queueId: queue._id, username: c.username, time: c.expectedTime })
-                                          }
-                                        }}
-                                        style={{ opacity: processingActionId === queue._id ? 0.5 : 1 }}
-                                      >
-                                        <span className="text-sm font-medium">{c.expectedTime}m</span>
-                                        <PencilLine size={12} className="text-muted" />
+                                <li 
+                                  key={c.username}
+                                  className="customer-item"
+                                  style={{ 
+                                    paddingLeft: '0.75rem', 
+                                    paddingRight: '1.5rem',
+                                    opacity: processingActionId === queue._id ? 0.6 : 1,
+                                    border: dragState.index === i && dragState.queueId === queue._id ? '2px dashed var(--text-muted)' : 'none'
+                                  }}
+                                  draggable={processingActionId !== queue._id}
+                                  onDragStart={(e) => onDragStart(e, queue._id, i)}
+                                  onDragOver={onDragOver}
+                                  onDrop={(e) => onDrop(e, queue._id, i)}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flexDirection: 'column', width: '100%' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                      
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        {/* Drag Handle & Manual Arrows */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginRight: '0.25rem' }}>
+                                          <button 
+                                            className="btn-icon" 
+                                            style={{ padding: 0, height: '14px', color: i === 0 ? 'transparent' : 'var(--text-muted)' }}
+                                            onClick={() => movePosition(queue._id, i, -1)}
+                                            disabled={i === 0 || processingActionId === queue._id}
+                                          >
+                                            <ChevronUp size={14} />
+                                          </button>
+                                          <GripVertical size={14} style={{ cursor: 'grab', color: 'var(--text-light)', margin: '2px 0' }} title="Drag to reorder" />
+                                          <button 
+                                            className="btn-icon" 
+                                            style={{ padding: 0, height: '14px', color: i === queue.customers.length - 1 ? 'transparent' : 'var(--text-muted)' }}
+                                            onClick={() => movePosition(queue._id, i, 1)}
+                                            disabled={i === queue.customers.length - 1 || processingActionId === queue._id}
+                                          >
+                                            <ChevronDown size={14} />
+                                          </button>
+                                        </div>
+
+                                        <span className="text-muted text-sm" style={{ width: '20px', textAlign: 'right', marginRight: '4px' }}>{i + 1}.</span>
+                                        <span className={`text-sm ${i === 0 ? 'font-medium' : ''}`}>{c.username}</span>
+                                      </div>
+                                      
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        {editingCustomerTime?.queueId === queue._id && editingCustomerTime?.username === c.username ? (
+                                          <input 
+                                            type="number"
+                                            className="time-editor-input text-sm"
+                                            value={editingCustomerTime.time}
+                                            onChange={(e) => setEditingCustomerTime({ ...editingCustomerTime, time: e.target.value })}
+                                            autoFocus
+                                            disabled={processingActionId === queue._id}
+                                            onBlur={() => {
+                                              updateCustomerTime(queue._id, c.username, editingCustomerTime.time);
+                                              setEditingCustomerTime(null);
+                                            }}
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter') {
+                                                updateCustomerTime(queue._id, c.username, editingCustomerTime.time);
+                                                setEditingCustomerTime(null);
+                                              }
+                                            }}
+                                          />
+                                        ) : (
+                                          <div 
+                                            className="time-editor-trigger" 
+                                            onClick={() => {
+                                              if(processingActionId !== queue._id) {
+                                                setEditingCustomerTime({ queueId: queue._id, username: c.username, time: getRemainingTime(c) })
+                                              }
+                                            }}
+                                          >
+                                            <span className="text-sm font-medium">{getRemainingTime(c)}m</span>
+                                            <PencilLine size={12} className="text-muted" />
+                                          </div>
+                                        )}
+
+                                        <button 
+                                          className="btn-icon" style={{ padding: '0.25rem' }}
+                                          onClick={() => performQueueAction(queue._id, 'remove', c.username)}
+                                          title="Remove User"
+                                          disabled={processingActionId === queue._id}
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {c.note && (
+                                      <div style={{ paddingLeft: '3.75rem', fontSize: '0.75rem', color: '#6b7280', fontStyle: 'italic', marginTop: '-4px' }}>
+                                        "{c.note}"
                                       </div>
                                     )}
-
-                                    <button 
-                                      className="btn-icon" style={{ padding: '0.25rem' }}
-                                      onClick={() => performQueueAction(queue._id, 'remove', c.username)}
-                                      title="Remove User"
-                                      disabled={processingActionId === queue._id}
-                                    >
-                                      <Trash2 size={14} />
-                                    </button>
                                   </div>
                                 </li>
                               ))}
@@ -808,21 +1017,32 @@ const performQueueAction = async (id, action, targetUsername = null) => {
                                 </button>
                               </div>
                             ) : (
-                              <button 
-                                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginTop: '0.25rem', background: '#18181b', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: '500', opacity: queue.status === 'paused' || processingActionId === queue._id ? 0.5 : 1, transition: 'all 0.2s', cursor: queue.status === 'paused' || processingActionId === queue._id ? 'not-allowed' : 'pointer' }}
-                                onMouseOver={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#000'; }}
-                                onMouseOut={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#18181b'; }}
-                                onClick={() => performQueueAction(queue._id, 'join')}
-                                disabled={queue.status === 'paused' || processingActionId === queue._id}
-                              >
-                                {processingActionId === queue._id ? (
-                                  <><Loader2 size={18} className="animate-spin" /> Processing...</>
-                                ) : queue.status === 'active' ? (
-                                  <><ArrowRight size={18} /> Join Queue</>
-                                ) : (
-                                  'Queue Paused'
-                                )}
-                              </button>
+                              <div style={{ marginTop: '0.25rem' }}>
+                                <input 
+                                  type="text" 
+                                  className="premium-input text-sm" 
+                                  style={{ marginBottom: '0.5rem', padding: '0.5rem 1rem' }}
+                                  placeholder="Reason for visit (optional)" 
+                                  value={joinNotes[queue._id] || ''}
+                                  onChange={(e) => setJoinNotes({...joinNotes, [queue._id]: e.target.value})}
+                                  disabled={queue.status === 'paused' || processingActionId === queue._id}
+                                />
+                                <button 
+                                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: '#18181b', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: '500', opacity: queue.status === 'paused' || processingActionId === queue._id ? 0.5 : 1, transition: 'all 0.2s', cursor: queue.status === 'paused' || processingActionId === queue._id ? 'not-allowed' : 'pointer' }}
+                                  onMouseOver={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#000'; }}
+                                  onMouseOut={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#18181b'; }}
+                                  onClick={() => performQueueAction(queue._id, 'join', null, joinNotes[queue._id])}
+                                  disabled={queue.status === 'paused' || processingActionId === queue._id}
+                                >
+                                  {processingActionId === queue._id ? (
+                                    <><Loader2 size={18} className="animate-spin" /> Processing...</>
+                                  ) : queue.status === 'active' ? (
+                                    <><ArrowRight size={18} /> Join Queue</>
+                                  ) : (
+                                    'Queue Paused'
+                                  )}
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
