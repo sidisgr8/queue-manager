@@ -140,3 +140,16 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--primary-blue);
   border-color: #bfdbfe;
 }
+
+/* --- TURN ALERT ANIMATIONS --- */
+@keyframes pulse-success {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  70% { box-shadow: 0 0 0 15px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.my-turn-card {
+  border: 2px solid var(--success-color) !important;
+  animation: pulse-success 2s infinite;
+  background-color: #f0fdf4; /* Very light green background */
+}

@@ -1,28 +1,94 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+const API_URL = "http://localhost:5000/api";
 
 function App() {
-  // --- MOCK DATABASE ---
-  const [users, setUsers] = useState([]); 
   const [queues, setQueues] = useState([]);
-
-  // --- SESSION STATE ---
   const [currentUser, setCurrentUser] = useState(null);
   const [authMode, setAuthMode] = useState("login"); 
   const [notification, setNotification] = useState("");
-
-  // --- FORM STATE ---
+  
+  // Forms
   const [authForm, setAuthForm] = useState({ username: "", password: "", role: "customer" });
-  const [newQueue, setNewQueue] = useState({ name: "", avgTime: 5 });
+  const [newQueue, setNewQueue] = useState({ name: "", avgTime: 5, image: "" });
   const [searchQuery, setSearchQuery] = useState("");
 
-  // --- HELPER: SHOW NOTIFICATIONS ---
+  // Edit State Tracking
+  const [editingQueue, setEditingQueue] = useState(null);
+
+  // Tracking notifications
+  const [notifiedQueues, setNotifiedQueues] = useState([]);
+
   const showNotification = (message) => {
     setNotification(message);
     setTimeout(() => setNotification(""), 3000);
   };
 
+  // --- IMAGE UPLOAD HANDLERS ---
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setNewQueue({ ...newQueue, image: reader.result });
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleEditImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setEditingQueue({ ...editingQueue, image: reader.result });
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // --- FETCHING & POLLING ---
+  const fetchQueues = async () => {
+    try {
+      const res = await fetch(`${API_URL}/queues`);
+      const data = await res.json();
+      setQueues(data);
+    } catch (err) {
+      console.error("Failed to fetch queues");
+    }
+  };
+
+  useEffect(() => {
+    fetchQueues();
+    // Only poll if we aren't currently editing a queue (prevents form jumping)
+    if (!editingQueue) {
+      const interval = setInterval(fetchQueues, 5000); 
+      return () => clearInterval(interval);
+    }
+  }, [editingQueue]);
+
+  useEffect(() => {
+    if (currentUser?.role === 'customer') {
+      let newNotified = [...notifiedQueues];
+      let changed = false;
+
+      queues.forEach(q => {
+        const myPos = q.customers.indexOf(currentUser.username);
+        if (myPos === 0 && !notifiedQueues.includes(q._id)) {
+          showNotification(`🎉 It's your turn in ${q.name}! Please proceed.`);
+          newNotified.push(q._id);
+          changed = true;
+        } else if (myPos !== 0 && notifiedQueues.includes(q._id)) {
+          newNotified = newNotified.filter(id => id !== q._id);
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        setNotifiedQueues(newNotified);
+      }
+    }
+  }, [queues, currentUser, notifiedQueues]);
+
+
   // --- AUTHENTICATION ---
-  const handleAuthSubmit = (e) => {
+  const handleAuthSubmit = async (e) => {
     e.preventDefault();
     const { username, password, role } = authForm;
 
@@ -31,22 +97,31 @@ function App() {
       return;
     }
 
-    if (authMode === "register") {
-      if (users.some((u) => u.username === username)) {
-        showNotification("Username is already taken.");
+    const endpoint = authMode === "register" ? "/auth/register" : "/auth/login";
+    
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password, role }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showNotification(data.error || "An error occurred");
         return;
       }
-      setUsers([...users, { username, password, role }]);
-      showNotification("Account created. Please log in.");
-      setAuthMode("login");
-      setAuthForm({ ...authForm, password: "" });
-    } else {
-      const foundUser = users.find(u => u.username === username && u.password === password);
-      if (foundUser) {
-        setCurrentUser(foundUser);
+
+      if (authMode === "register") {
+        showNotification("Account created. Please log in.");
+        setAuthMode("login");
+        setAuthForm({ ...authForm, password: "" });
       } else {
-        showNotification("Invalid credentials.");
+        setCurrentUser(data);
+        showNotification(`Welcome, ${data.username}!`);
       }
+    } catch (err) {
+      showNotification("Server connection failed.");
     }
   };
 
@@ -56,58 +131,69 @@ function App() {
     setSearchQuery("");
   };
 
-  // --- QUEUE MANAGEMENT (MANAGER) ---
-  const createQueue = (e) => {
+  // --- QUEUE MANAGEMENT ---
+  const createQueue = async (e) => {
     e.preventDefault();
     if (!newQueue.name.trim()) return;
     
-    setQueues([
-      ...queues,
-      { 
-        id: Date.now(), 
-        name: newQueue.name, 
-        manager: currentUser.username, 
-        customers: [],
-        status: 'active',
-        avgTime: parseInt(newQueue.avgTime) || 5
-      }
-    ]);
-    setNewQueue({ name: "", avgTime: 5 });
-    showNotification("Queue created successfully.");
+    try {
+      await fetch(`${API_URL}/queues`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newQueue.name,
+          manager: currentUser.username,
+          avgTime: parseInt(newQueue.avgTime) || 5,
+          image: newQueue.image
+        }),
+      });
+      setNewQueue({ name: "", avgTime: 5, image: "" });
+      // Reset the file input visually
+      document.getElementById("createQueueFileInput").value = "";
+      showNotification("Queue created successfully.");
+      fetchQueues();
+    } catch (err) {
+      showNotification("Failed to create queue.");
+    }
   };
 
-  const deleteQueue = (id) => setQueues(queues.filter(q => q.id !== id));
-
-  const toggleQueueStatus = (id) => {
-    setQueues(queues.map(q => 
-      q.id === id ? { ...q, status: q.status === 'active' ? 'paused' : 'active' } : q
-    ));
+  const updateQueueDetails = async (e) => {
+    e.preventDefault();
+    try {
+      await fetch(`${API_URL}/queues/${editingQueue._id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editingQueue.name,
+          avgTime: parseInt(editingQueue.avgTime) || 5,
+          image: editingQueue.image
+        }),
+      });
+      setEditingQueue(null);
+      showNotification("Queue updated.");
+      fetchQueues();
+    } catch (err) {
+      showNotification("Failed to update queue.");
+    }
   };
 
-  const processQueue = (id, action, customerName = null) => {
-    setQueues(queues.map(q => {
-      if (q.id !== id) return q;
-      if (action === 'next') return { ...q, customers: q.customers.slice(1) };
-      if (action === 'remove') return { ...q, customers: q.customers.filter(c => c !== customerName) };
-      return q;
-    }));
+  const deleteQueue = async (id) => {
+    await fetch(`${API_URL}/queues/${id}`, { method: "DELETE" });
+    fetchQueues();
   };
 
-  // --- QUEUE ACTIONS (CUSTOMER) ---
-  const joinQueue = (id) => {
-    setQueues(queues.map(q => 
-      q.id === id && !q.customers.includes(currentUser.username) && q.status === 'active'
-        ? { ...q, customers: [...q.customers, currentUser.username] }
-        : q
-    ));
+  const toggleQueueStatus = async (id) => {
+    await fetch(`${API_URL}/queues/${id}/status`, { method: "PUT" });
+    fetchQueues();
   };
 
-  const leaveQueue = (id) => {
-    setQueues(queues.map(q => 
-      q.id === id 
-        ? { ...q, customers: q.customers.filter(u => u !== currentUser.username) }
-        : q
-    ));
+  const performQueueAction = async (id, action, targetUsername = null) => {
+    await fetch(`${API_URL}/queues/${id}/action`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, username: targetUsername || currentUser.username }),
+    });
+    fetchQueues();
   };
 
   const filteredQueues = queues.filter(q => 
@@ -115,11 +201,9 @@ function App() {
     q.manager.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // --- UI RENDERING ---
   return (
     <div className="container py-5 min-vh-100 d-flex flex-column">
       
-      {/* Minimal Notification */}
       {notification && (
         <div className="position-fixed top-0 start-50 translate-middle-x mt-4 animate-fade-in" style={{ zIndex: 1050 }}>
           <div className="bg-dark text-white px-4 py-2 rounded shadow-sm text-sm">
@@ -129,7 +213,7 @@ function App() {
       )}
 
       {!currentUser ? (
-        // --- LOGIN / REGISTER ---
+        // --- LOGIN / REGISTER UI ---
         <div className="row justify-content-center align-items-center flex-grow-1 animate-fade-in">
           <div className="col-11 col-md-5 col-lg-4">
             <div className="minimal-card p-4 p-md-5">
@@ -184,6 +268,7 @@ function App() {
 
               <div className="text-center mt-2 pt-3 border-top border-light">
                 <button 
+                  type="button"
                   className="btn btn-link p-0 text-decoration-none text-muted small" 
                   onClick={() => {
                     setAuthMode(authMode === 'login' ? 'register' : 'login');
@@ -197,9 +282,8 @@ function App() {
           </div>
         </div>
       ) : (
-        // --- MAIN DASHBOARD ---
+        // --- MAIN DASHBOARD UI ---
         <div className="animate-fade-in">
-          {/* Top Navbar */}
           <div className="d-flex justify-content-between align-items-center mb-5 pb-3 border-bottom">
             <h4 className="m-0 fw-bold">QueueSys.</h4>
             <div className="d-flex align-items-center gap-3">
@@ -220,7 +304,7 @@ function App() {
                 <h6 className="text-muted text-uppercase mb-3" style={{letterSpacing: '0.05em'}}>Create Queue</h6>
                 <div className="minimal-card p-4">
                   <form onSubmit={createQueue} className="row g-3 align-items-end">
-                    <div className="col-md-7">
+                    <div className="col-md-4">
                       <label className="form-label text-muted small mb-1">Queue Name</label>
                       <input 
                         className="form-control minimal-input"
@@ -230,8 +314,18 @@ function App() {
                         required
                       />
                     </div>
-                    <div className="col-md-3">
-                      <label className="form-label text-muted small mb-1">Est. Time (mins)</label>
+                    <div className="col-md-4">
+                      <label className="form-label text-muted small mb-1">Cover Image (Optional)</label>
+                      <input 
+                        id="createQueueFileInput"
+                        type="file"
+                        accept="image/*"
+                        className="form-control minimal-input"
+                        onChange={handleImageUpload}
+                      />
+                    </div>
+                    <div className="col-md-2">
+                      <label className="form-label text-muted small mb-1">Time (mins)</label>
                       <input 
                         type="number"
                         min="1"
@@ -252,66 +346,135 @@ function App() {
                 <h6 className="text-muted text-uppercase mb-3 mt-4" style={{letterSpacing: '0.05em'}}>Active Queues</h6>
                 <div className="row g-4">
                   {queues.filter(q => q.manager === currentUser.username).map(queue => (
-                    <div key={queue.id} className="col-md-6 col-xl-4 animate-fade-in">
-                      <div className="minimal-card h-100 d-flex flex-column">
-                        <div className="p-4 border-bottom">
-                          <div className="d-flex justify-content-between align-items-start mb-1">
-                            <h5 className="fw-bold mb-0 text-truncate pe-2">{queue.name}</h5>
-                            <button 
-                              className="btn btn-link p-0 text-decoration-none text-muted small"
-                              onClick={() => toggleQueueStatus(queue.id)}
-                            >
-                              {queue.status === 'active' ? 'Pause' : 'Resume'}
-                            </button>
-                          </div>
-                          <div className="d-flex align-items-center gap-2 mt-2">
-                            <span className={`status-dot ${queue.status === 'active' ? 'status-active' : 'status-paused'}`}></span>
-                            <span className="text-muted small text-capitalize">{queue.status}</span>
-                            <span className="text-muted small ms-auto">{queue.avgTime}m / person</span>
-                          </div>
-                        </div>
+                    <div key={queue._id} className="col-md-6 col-xl-4 animate-fade-in">
+                      
+                      {/* CARD TOGGLES BETWEEN EDIT AND VIEW MODE */}
+                      {editingQueue && editingQueue._id === queue._id ? (
                         
-                        <div className="card-body p-0 flex-grow-1">
-                          {queue.customers.length === 0 ? (
-                            <div className="text-center text-muted py-5 small">
-                              Queue is empty.
+                        // --- EDIT MODE VIEW ---
+                        <div className="minimal-card h-100 d-flex flex-column p-4">
+                          <h6 className="fw-bold mb-4">Edit Queue Details</h6>
+                          <form onSubmit={updateQueueDetails} className="d-flex flex-column flex-grow-1">
+                            <div className="mb-3">
+                              <label className="form-label text-muted small mb-1">Queue Name</label>
+                              <input 
+                                className="form-control minimal-input" 
+                                value={editingQueue.name} 
+                                onChange={(e) => setEditingQueue({...editingQueue, name: e.target.value})} 
+                                required
+                              />
                             </div>
-                          ) : (
-                            <ul className="list-group list-group-flush">
-                              {queue.customers.map((c, i) => (
-                                <li key={i} className="list-group-item bg-transparent p-3 d-flex justify-content-between align-items-center border-0 border-bottom">
-                                  <div className="d-flex align-items-center gap-3">
-                                    <span className="text-muted small" style={{width: '20px'}}>{i + 1}.</span>
-                                    <span className={`small ${i === 0 ? 'fw-bold' : ''}`}>{c}</span>
-                                  </div>
-                                  <button 
-                                    className="btn btn-link text-muted p-0 text-decoration-none small"
-                                    onClick={() => processQueue(queue.id, 'remove', c)}
-                                  >
-                                    Remove
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
+                            <div className="mb-3">
+                              <label className="form-label text-muted small mb-1">Est. Wait Time (mins)</label>
+                              <input 
+                                type="number" 
+                                min="1"
+                                className="form-control minimal-input" 
+                                value={editingQueue.avgTime} 
+                                onChange={(e) => setEditingQueue({...editingQueue, avgTime: e.target.value})} 
+                                required
+                              />
+                            </div>
+                            <div className="mb-4">
+                              <label className="form-label text-muted small mb-1">Cover Image</label>
+                              <input 
+                                type="file" 
+                                accept="image/*" 
+                                className="form-control minimal-input" 
+                                onChange={handleEditImageUpload} 
+                              />
+                              {editingQueue.image && (
+                                <button 
+                                  type="button" 
+                                  className="btn btn-link text-danger p-0 mt-2 text-decoration-none small"
+                                  onClick={() => setEditingQueue({...editingQueue, image: ""})}
+                                >
+                                  Remove Image
+                                </button>
+                              )}
+                            </div>
+                            <div className="mt-auto d-flex gap-2">
+                              <button type="submit" className="btn-minimal-dark flex-grow-1 py-1">Save Changes</button>
+                              <button type="button" className="btn-minimal-outline py-1 px-3" onClick={() => setEditingQueue(null)}>Cancel</button>
+                            </div>
+                          </form>
                         </div>
 
-                        <div className="p-3 bg-light border-top d-flex gap-2 rounded-bottom">
-                          <button 
-                            className="btn-minimal-dark flex-grow-1 text-sm py-1"
-                            disabled={queue.customers.length === 0}
-                            onClick={() => processQueue(queue.id, 'next')}
-                          >
-                            Call Next
-                          </button>
-                          <button 
-                            className="btn-minimal-outline text-danger py-1 px-3 border-danger"
-                            onClick={() => deleteQueue(queue.id)}
-                          >
-                            Delete
-                          </button>
+                      ) : (
+
+                        // --- NORMAL MANAGER CARD VIEW ---
+                        <div className="minimal-card h-100 d-flex flex-column overflow-hidden">
+                          {queue.image && (
+                            <div style={{ height: '140px', width: '100%', overflow: 'hidden', borderBottom: '1px solid #eaeaea' }}>
+                              <img src={queue.image} alt={queue.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            </div>
+                          )}
+
+                          <div className="p-4 border-bottom">
+                            <div className="d-flex justify-content-between align-items-start mb-1">
+                              <h5 className="fw-bold mb-0 text-truncate pe-2">{queue.name}</h5>
+                              <button 
+                                className="btn btn-link p-0 text-decoration-none text-muted small"
+                                onClick={() => toggleQueueStatus(queue._id)}
+                              >
+                                {queue.status === 'active' ? 'Pause' : 'Resume'}
+                              </button>
+                            </div>
+                            <div className="d-flex align-items-center gap-2 mt-2">
+                              <span className={`status-dot ${queue.status === 'active' ? 'status-active' : 'status-paused'}`}></span>
+                              <span className="text-muted small text-capitalize">{queue.status}</span>
+                              <span className="text-muted small ms-auto">{queue.avgTime}m / person</span>
+                            </div>
+                          </div>
+                          
+                          <div className="card-body p-0 flex-grow-1">
+                            {queue.customers.length === 0 ? (
+                              <div className="text-center text-muted py-5 small">Queue is empty.</div>
+                            ) : (
+                              <ul className="list-group list-group-flush">
+                                {queue.customers.map((c, i) => (
+                                  <li key={i} className="list-group-item bg-transparent p-3 d-flex justify-content-between align-items-center border-0 border-bottom">
+                                    <div className="d-flex align-items-center gap-3">
+                                      <span className="text-muted small" style={{width: '20px'}}>{i + 1}.</span>
+                                      <span className={`small ${i === 0 ? 'fw-bold' : ''}`}>{c}</span>
+                                    </div>
+                                    <button 
+                                      className="btn btn-link text-muted p-0 text-decoration-none small"
+                                      onClick={() => performQueueAction(queue._id, 'remove', c)}
+                                    >
+                                      Remove
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+
+                          {/* ACTION BUTTONS WITH "EDIT" ADDED */}
+                          <div className="p-3 bg-light border-top d-flex gap-2 rounded-bottom flex-wrap">
+                            <button 
+                              className="btn-minimal-dark flex-grow-1 text-sm py-1"
+                              disabled={queue.customers.length === 0}
+                              onClick={() => performQueueAction(queue._id, 'next')}
+                            >
+                              Call Next
+                            </button>
+                            <button 
+                              className="btn-minimal-outline text-primary py-1 px-3 border-primary"
+                              onClick={() => setEditingQueue(queue)}
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              className="btn-minimal-outline text-danger py-1 px-3 border-danger"
+                              onClick={() => deleteQueue(queue._id)}
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </div>
-                      </div>
+
+                      )}
                     </div>
                   ))}
                 </div>
@@ -336,9 +499,7 @@ function App() {
 
               <div className="row g-4">
                 {filteredQueues.length === 0 && (
-                  <div className="col-12 text-center py-5 text-muted small">
-                    No queues found.
-                  </div>
+                  <div className="col-12 text-center py-5 text-muted small">No queues found.</div>
                 )}
                 
                 {filteredQueues.map(queue => {
@@ -347,8 +508,23 @@ function App() {
                   const estimatedWait = myPos > 0 ? myPos * queue.avgTime : 0;
                   
                   return (
-                    <div key={queue.id} className="col-md-6 col-xl-4 animate-fade-in">
-                      <div className="minimal-card h-100 overflow-hidden" style={inQueue ? {borderColor: 'var(--text-primary)'} : {}}>
+                    <div key={queue._id} className="col-md-6 col-xl-4 animate-fade-in">
+                      <div 
+                        className={`minimal-card h-100 overflow-hidden ${myPos === 0 ? 'my-turn-card' : ''}`} 
+                        style={inQueue && myPos !== 0 ? {borderColor: 'var(--text-primary)'} : {}}
+                      >
+                        {myPos === 0 && (
+                          <div className="bg-success text-white text-center py-2 fw-bold shadow-sm animate-fade-in" style={{ letterSpacing: '2px' }}>
+                            🚨 IT IS YOUR TURN! 🚨
+                          </div>
+                        )}
+
+                        {queue.image && (
+                          <div style={{ height: '140px', width: '100%', overflow: 'hidden', borderBottom: '1px solid #eaeaea' }}>
+                            <img src={queue.image} alt={queue.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          </div>
+                        )}
+
                         <div className="p-4">
                           <div className="d-flex justify-content-between align-items-start mb-2">
                             <h5 className="fw-bold mb-0 text-dark">{queue.name}</h5>
@@ -376,7 +552,7 @@ function App() {
                               <div className="fs-2 fw-bold mb-2">#{myPos + 1}</div>
                               
                               {myPos === 0 ? (
-                                <div className="text-success small fw-medium mb-3">It's your turn.</div>
+                                <div className="text-success small fw-medium mb-3">Please proceed to the desk.</div>
                               ) : (
                                 <div className="text-muted small mb-3">
                                   Est. wait: {estimatedWait} mins
@@ -385,7 +561,7 @@ function App() {
                               
                               <button 
                                 className="btn-minimal-outline w-100 text-danger"
-                                onClick={() => leaveQueue(queue.id)}
+                                onClick={() => performQueueAction(queue._id, 'leave')}
                               >
                                 Leave Queue
                               </button>
@@ -393,7 +569,7 @@ function App() {
                           ) : (
                             <button 
                               className="btn-minimal-dark w-100"
-                              onClick={() => joinQueue(queue.id)}
+                              onClick={() => performQueueAction(queue._id, 'join')}
                               disabled={queue.status === 'paused'}
                             >
                               {queue.status === 'active' ? 'Join Queue' : 'Paused'}
