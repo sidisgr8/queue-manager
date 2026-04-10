@@ -23,8 +23,8 @@ const User = mongoose.model('User', userSchema);
 const queueSchema = new mongoose.Schema({
   name: { type: String, required: true },
   manager: { type: String, required: true },
+  category: { type: String, default: 'Other' },
   
-  // NEW: Location details
   location: {
     address: { type: String, default: '' },
     lat: { type: Number },
@@ -93,15 +93,16 @@ app.post('/api/queues', async (req, res) => {
 
 app.put('/api/queues/:id', async (req, res) => {
   try {
-    const { name, avgTime, image, location } = req.body;
+    const { name, avgTime, image, location, category } = req.body; 
     const updateData = { name, avgTime };
     if (image !== undefined) updateData.image = image;
     if (location !== undefined) updateData.location = location;
+    if (category !== undefined) updateData.category = category;
 
     const queue = await Queue.findByIdAndUpdate(
       req.params.id, 
       updateData, 
-      { new: true }
+      { returnDocument: 'after' } // FIXED MONGOOSE WARNING
     );
     res.json(queue);
   } catch (error) {
@@ -129,7 +130,6 @@ app.delete('/api/queues/:id', async (req, res) => {
   }
 });
 
-// NEW ROUTE: Update a specific customer's wait time
 app.put('/api/queues/:id/customer-time', async (req, res) => {
   try {
     const { username, expectedTime } = req.body;
@@ -145,9 +145,6 @@ app.put('/api/queues/:id/customer-time', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-// backend/server.js
-// ... (keep existing imports and schemas)
 
 app.put('/api/queues/:id/action', async (req, res) => {
   try {
@@ -183,9 +180,6 @@ app.put('/api/queues/:id/action', async (req, res) => {
   }
 });
 
-// ... (rest of the file)
-
-// NEW ROUTE: Reorder the entire queue list (Drag & Drop / Move)
 app.put('/api/queues/:id/reorder', async (req, res) => {
   try {
     const { customers } = req.body;
@@ -193,7 +187,6 @@ app.put('/api/queues/:id/reorder', async (req, res) => {
     
     if (!queue) return res.status(404).json({ error: 'Queue not found' });
     
-    // Replace the existing customers array with the newly ordered one
     queue.customers = customers;
     
     await queue.save();
