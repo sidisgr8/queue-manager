@@ -169,7 +169,6 @@ function App() {
         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
         const data = await res.json();
         
-        // Remove super long parts of the address for cleaner UI
         const cleanAddress = data.display_name.split(',').slice(0, 3).join(',') || "Pinned Map Location";
         
         if (isEdit) {
@@ -558,12 +557,23 @@ function App() {
       )}
 
       {!currentUser ? (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexGrow: 1 }} className="animate-fade-in">
-          <div className="premium-card" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', flexGrow: 1, padding: '2rem 0' }}>
+          
+          {/* FANCY DESCRIPTIVE BLOCK */}
+          <div className="animate-slide-up" style={{ textAlign: 'center', marginBottom: '3rem', maxWidth: '600px' }}>
+            <h1 className="animate-gradient-text animate-float" style={{ fontSize: '4.5rem', fontWeight: 800, marginBottom: '0.5rem', letterSpacing: '-0.05em' }}>
+              QueueSys.
+            </h1>
+            <p style={{ fontSize: '1.25rem', color: 'var(--text-muted)', lineHeight: 1.6, fontWeight: 400 }}>
+              The smartest way to manage waits. Join lines virtually, save your time, and arrive exactly when it's your turn.
+            </p>
+          </div>
+
+          <div className="premium-card animate-slide-up" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem', animationDelay: '0.15s' }}>
             <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
-              <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>QueueSys.</h2>
+              <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Welcome Back</h2>
               <p className="text-muted text-sm">
-                {authMode === 'login' ? 'Sign in to your account' : 'Register a new account'}
+                {authMode === 'login' ? 'Sign in to access your queues' : 'Register a new account'}
               </p>
             </div>
 
@@ -641,8 +651,14 @@ function App() {
         </div>
       ) : (
         <div className="animate-fade-in">
-          <header className="app-header">
-            <h1 className="brand">QueueSys.</h1>
+          
+          <header className="app-header animate-slide-up" style={{ paddingBottom: '1.5rem' }}>
+            <div>
+              <h1 className="brand animate-gradient-text" style={{ fontSize: '2.25rem', display: 'inline-block' }}>QueueSys.</h1>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginTop: '0.25rem' }}>
+                Your central hub for seamless queue management.
+              </p>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
               <div style={{ textAlign: 'right' }} className="hidden-mobile">
                 <div className="font-medium text-sm">{currentUser.username}</div>
@@ -656,7 +672,7 @@ function App() {
 
           {/* MANAGER VIEW */}
           {currentUser.role === 'manager' && (
-            <div>
+            <div className="animate-slide-up" style={{ animationDelay: '0.1s' }}>
               <div className="dashboard-form-container">
                 <h3 style={{ fontSize: '1.125rem', marginBottom: '1.25rem' }}>Create New Queue</h3>
                 <form onSubmit={createQueue} className="form-grid">
@@ -700,7 +716,7 @@ function App() {
                   </div>
 
                   <div className="input-group" style={{ marginBottom: 0 }}>
-                    <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <label className="input-label" style={{ display: 'flex', justify-content: 'space-between' }}>
                       <span>Location (Address & Coordinates)</span>
                       <a href="https://www.google.com/maps" target="_blank" rel="noreferrer" style={{ fontSize: '0.75rem', color: 'var(--text-main)', textDecoration: 'underline' }}>Open Google Maps</a>
                     </label>
@@ -1087,7 +1103,7 @@ function App() {
 
           {/* CUSTOMER VIEW */}
           {currentUser.role === 'customer' && (
-            <div>
+            <div className="animate-slide-up" style={{ animationDelay: '0.1s' }}>
               {/* FILTER BAR ROW */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
                 <h3 style={{ fontSize: '1.25rem' }}>Find a Queue</h3>
@@ -1149,7 +1165,7 @@ function App() {
                   </div>
                 )}
                 
-                {filteredQueues.map(queue => {
+                {filteredQueues.map((queue, idx) => {
                   const myPos = queue.customers.findIndex(c => c.username === currentUser.username);
                   const inQueue = myPos !== -1;
                   
@@ -1167,9 +1183,9 @@ function App() {
                     : null;
                   
                   return (
-                    <div key={queue._id} className="animate-fade-in" style={{ display: 'flex', height: '100%', flexDirection: 'column' }}>
+                    <div key={queue._id} className="animate-slide-up" style={{ display: 'flex', height: '100%', flexDirection: 'column', animationDelay: `${(idx % 5) * 0.1}s` }}>
                       <div 
-                        className="h-100 overflow-hidden d-flex flex-column" 
+                        className="h-100 overflow-hidden d-flex flex-column premium-card" 
                         style={{
                           transition: 'all 0.3s ease',
                           boxShadow: myPos === 0 ? '0 0 0 4px rgba(16, 185, 129, 0.2)' : '0 4px 20px rgba(0,0,0,0.04)',
