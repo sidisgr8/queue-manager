@@ -165,7 +165,6 @@ function App() {
     }
   };
 
-  // --- LOCATION HELPERS ---
   const handleUrlPaste = async (val, isEdit) => {
     const coords = extractCoordinatesFromUrl(val);
     if (coords) {
@@ -554,8 +553,7 @@ function App() {
   }
 
   return (
-    <div className="app-container">
-      
+    <>
       {notification && (
         <div className="toast-notification">
           <BellRing size={18} />
@@ -564,20 +562,32 @@ function App() {
       )}
 
       {!currentUser ? (
-        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', flexGrow: 1, padding: '2rem 0' }}>
+        
+        /* --- NEW FULL-SCREEN AESTHETIC AUTH PAGE --- */
+        <div className="auth-wrapper">
+          {/* Your Custom Animated Background */}
+          <div className="auth-bg"></div>
           
-          <div className="animate-slide-up" style={{ textAlign: 'center', marginBottom: '3rem', maxWidth: '600px' }}>
-            <h1 className="animate-gradient-text animate-float" style={{ fontSize: '4.5rem', fontWeight: 800, marginBottom: '0.5rem', letterSpacing: '-0.05em' }}>
+          {/* Aesthetic Floating Orbs */}
+          <div className="ambient-orb orb-1"></div>
+          <div className="ambient-orb orb-2"></div>
+          
+          {/* Dark Overlay so text is readable over any image */}
+          <div className="auth-overlay"></div>
+          
+          <div className="animate-slide-up" style={{ textAlign: 'center', marginBottom: '3rem', maxWidth: '600px', zIndex: 1 }}>
+            {/* UPDATED: Gradient colors now match the purple -> blue -> mint green of your image */}
+            <h1 className="animate-gradient-text animate-float" style={{ fontSize: '4.5rem', fontWeight: 800, marginBottom: '0.5rem', letterSpacing: '-0.05em', background: 'linear-gradient(90deg, #828DF8, #62B8F6, #2ED5B0, #828DF8)', backgroundSize: '300% 300%', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
               QueueSys.
             </h1>
-            <p style={{ fontSize: '1.25rem', color: 'var(--text-muted)', lineHeight: 1.6, fontWeight: 400 }}>
+            <p className="auth-text-light-muted" style={{ fontSize: '1.25rem', lineHeight: 1.6, fontWeight: 400 }}>
               The smartest way to manage waits. Join lines virtually, save your time, and arrive exactly when it's your turn.
             </p>
           </div>
 
-          <div className="premium-card animate-slide-up" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem', animationDelay: '0.15s' }}>
+          <div className="premium-card glass-card animate-slide-up" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem', animationDelay: '0.15s', zIndex: 1 }}>
             <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
-              <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Welcome Back</h2>
+              <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem', color: '#18181b' }}>Welcome Back</h2>
               <p className="text-muted text-sm">
                 {authMode === 'login' ? 'Sign in to access your queues' : 'Register a new account'}
               </p>
@@ -585,13 +595,14 @@ function App() {
 
             <form onSubmit={handleAuthSubmit}>
               <div className="input-group">
-                <label className="input-label">Username</label>
+                <label className="input-label" style={{ color: '#3f3f46' }}>Username</label>
                 <div style={{ position: 'relative' }}>
-                  <User size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }} />
+                  <User size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#52525b' }} />
                   <input
                     type="text"
                     className="premium-input"
-                    style={{ paddingLeft: '2.5rem' }}
+                    /* Adjusted input background to match the more transparent card */
+                    style={{ paddingLeft: '2.5rem', background: 'rgba(255,255,255,0.5)', borderColor: 'rgba(0,0,0,0.1)' }}
                     value={authForm.username}
                     onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
                     required
@@ -601,13 +612,13 @@ function App() {
               </div>
               
               <div className="input-group" style={{ marginBottom: '1.5rem' }}>
-                <label className="input-label">Password</label>
+                <label className="input-label" style={{ color: '#3f3f46' }}>Password</label>
                 <div style={{ position: 'relative' }}>
-                  <Lock size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }} />
+                  <Lock size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#52525b' }} />
                   <input
                     type="password"
                     className="premium-input"
-                    style={{ paddingLeft: '2.5rem' }}
+                    style={{ paddingLeft: '2.5rem', background: 'rgba(255,255,255,0.5)', borderColor: 'rgba(0,0,0,0.1)' }}
                     value={authForm.password}
                     onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
                     required
@@ -618,9 +629,10 @@ function App() {
 
               {authMode === 'register' && (
                 <div className="input-group animate-fade-in" style={{ marginBottom: '1.5rem' }}>
-                  <label className="input-label">Account Type</label>
+                  <label className="input-label" style={{ color: '#3f3f46' }}>Account Type</label>
                   <select
                     className="premium-input"
+                    style={{ background: 'rgba(255,255,255,0.5)', borderColor: 'rgba(0,0,0,0.1)' }}
                     value={authForm.role}
                     onChange={(e) => setAuthForm({ ...authForm, role: e.target.value })}
                     disabled={processingActionId === 'auth'}
@@ -640,10 +652,10 @@ function App() {
               </button>
             </form>
 
-            <div style={{ textAlign: 'center', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
+            <div style={{ textAlign: 'center', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
               <button 
                 type="button"
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.875rem', cursor: 'pointer' }}
+                style={{ background: 'none', border: 'none', color: '#3f3f46', fontSize: '0.875rem', cursor: 'pointer', fontWeight: 500 }}
                 onClick={() => {
                   setAuthMode(authMode === 'login' ? 'register' : 'login');
                   setNotification("");
@@ -655,8 +667,11 @@ function App() {
             </div>
           </div>
         </div>
+
       ) : (
-        <div className="animate-fade-in">
+
+        /* --- DASHBOARD COMPONENT --- */
+        <div className="app-container animate-fade-in">
           
           <header className="app-header animate-slide-up" style={{ paddingBottom: '1.5rem' }}>
             <div>
@@ -1376,7 +1391,7 @@ function App() {
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }
 

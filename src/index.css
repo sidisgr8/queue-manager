@@ -204,7 +204,7 @@ p { margin: 0; }
   100% { background-position: 0% 50%; }
 }
 .animate-gradient-text {
-  background: linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6, #10b981);
+  background: linear-gradient(90deg, #828DF8, #62B8F6, #2ED5B0, #828DF8);
   background-size: 300% 300%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -236,3 +236,83 @@ p { margin: 0; }
 .animate-spin {
   animation: spin 1s linear infinite;
 }
+
+/* --- FULL SCREEN AUTH & AESTHETIC ANIMATIONS --- */
+
+.auth-wrapper {
+  position: relative;
+  min-height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 2rem;
+  box-sizing: border-box;
+}
+
+/* 1. Your Stretched Background Image with Slow Pan */
+.auth-bg {
+  position: absolute;
+  top: -5%; left: -5%; right: -5%; bottom: -5%;
+  /* 👇 CHANGE THIS TO YOUR EXACT FILE NAME IN THE PUBLIC FOLDER 👇 */
+  background-image: url('/bg-image.jpg'); 
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  z-index: -4;
+  /* Cinematic slow zoom/pan effect */
+  animation: ambientPan 25s ease-in-out infinite alternate;
+}
+
+@keyframes ambientPan {
+  0% { transform: scale(1) translate(0, 0); }
+  100% { transform: scale(1.08) translate(-1%, -1%); }
+}
+
+/* 2. Aesthetic Animated Glowing Orbs */
+.ambient-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.6;
+  z-index: -3;
+  animation: floatOrb 12s ease-in-out infinite alternate;
+}
+.orb-1 {
+  width: 400px; height: 400px;
+  background: #10b981; /* Brand green */
+  top: -10%; left: -10%;
+}
+.orb-2 {
+  width: 500px; height: 500px;
+  background: #3b82f6; /* Soft blue */
+  bottom: -20%; right: -10%;
+  animation-delay: -6s;
+}
+
+@keyframes floatOrb {
+  0% { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(60px, 60px) scale(1.1); }
+}
+
+/* 3. Dark Overlay to ensure text readability */
+.auth-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(135deg, rgba(24, 24, 27, 0.7) 0%, rgba(24, 24, 27, 0.3) 100%);
+  z-index: -2;
+}
+
+/* 4. Frosted Glass Effect for the Card */
+.glass-card {
+  /* Lowered opacity from 0.85 to 0.35 for better transparency */
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+}
+
+.auth-text-light-muted { color: rgba(255, 255, 255, 0.9); }
