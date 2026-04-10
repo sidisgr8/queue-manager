@@ -23,7 +23,13 @@ const User = mongoose.model('User', userSchema);
 const queueSchema = new mongoose.Schema({
   name: { type: String, required: true },
   manager: { type: String, required: true },
-  customers: [{ type: String }],
+  
+  // CHANGED: Now stores an array of objects to hold individual times
+  customers: [{ 
+    username: { type: String },
+    expectedTime: { type: Number } 
+  }],
+  
   status: { type: String, enum: ['active', 'paused'], default: 'active' },
   avgTime: { type: Number, default: 5 },
   image: { type: String } 
@@ -76,16 +82,11 @@ app.post('/api/queues', async (req, res) => {
   }
 });
 
-// --- NEW ROUTE: UPDATE EXISTING QUEUE DETAILS ---
 app.put('/api/queues/:id', async (req, res) => {
   try {
     const { name, avgTime, image } = req.body;
     const updateData = { name, avgTime };
-    
-    // Only update image if it's explicitly sent (handles both new image and clearing image)
-    if (image !== undefined) {
-      updateData.image = image;
-    }
+    if (image !== undefined) updateData.image = image;
 
     const queue = await Queue.findByIdAndUpdate(
       req.params.id, 
@@ -118,6 +119,24 @@ app.delete('/api/queues/:id', async (req, res) => {
   }
 });
 
+// NEW ROUTE: Update a specific customer's wait time
+app.put('/api/queues/:id/customer-time', async (req, res) => {
+  try {
+    const { username, expectedTime } = req.body;
+    const queue = await Queue.findById(req.params.id);
+    
+    const customer = queue.customers.find(c => c.username === username);
+    if (customer) {
+      customer.expectedTime = Number(expectedTime);
+      await queue.save();
+    }
+    res.json(queue);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// UPDATED: Actions handle objects instead of strings
 app.put('/api/queues/:id/action', async (req, res) => {
   try {
     const { action, username } = req.body;
@@ -126,10 +145,12 @@ app.put('/api/queues/:id/action', async (req, res) => {
     if (action === 'next') {
       queue.customers.shift(); 
     } else if (action === 'remove' || action === 'leave') {
-      queue.customers = queue.customers.filter(c => c !== username);
+      // Changed to check c.username
+      queue.customers = queue.customers.filter(c => c.username !== username);
     } else if (action === 'join') {
-      if (!queue.customers.includes(username) && queue.status === 'active') {
-        queue.customers.push(username);
+      // Changed to check c.username and push an object
+      if (!queue.customers.some(c => c.username === username) && queue.status === 'active') {
+        queue.customers.push({ username, expectedTime: queue.avgTime });
       }
     }
 
