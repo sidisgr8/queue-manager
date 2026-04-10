@@ -136,7 +136,9 @@ app.put('/api/queues/:id/customer-time', async (req, res) => {
   }
 });
 
-// UPDATED: Actions handle objects instead of strings
+// backend/server.js
+// ... (keep existing imports and schemas)
+
 app.put('/api/queues/:id/action', async (req, res) => {
   try {
     const { action, username } = req.body;
@@ -145,21 +147,21 @@ app.put('/api/queues/:id/action', async (req, res) => {
     if (action === 'next') {
       queue.customers.shift(); 
     } else if (action === 'remove' || action === 'leave') {
-      // Changed to check c.username
       queue.customers = queue.customers.filter(c => c.username !== username);
     } else if (action === 'join') {
-      // Changed to check c.username and push an object
       if (!queue.customers.some(c => c.username === username) && queue.status === 'active') {
         queue.customers.push({ username, expectedTime: queue.avgTime });
       }
     }
 
     await queue.save();
-    res.json(queue);
+    res.json(queue); // Always return updated queue for synchronization
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ... (rest of the file)
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
