@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { 
   BellRing, LogOut, CheckCircle2, Search, Trash2, 
   PencilLine, Play, Pause, Users, Clock, ArrowRight,
@@ -6,12 +6,10 @@ import {
   ChevronUp, ChevronDown, GripVertical, MapPin, User, Lock
 } from "lucide-react";
 
-// Vite uses import.meta.env to access environment variables
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const CATEGORIES = ["Restaurant", "Hospital", "Bank", "Retail", "Event", "Other"];
 
-// Helper to calculate distance between two lat/lng pairs in kilometers
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
   if (!lat1 || !lon1 || !lat2 || !lon2) return null;
   const R = 6371;
@@ -24,13 +22,12 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return (R * c).toFixed(1);
 };
 
-// Helper to extract coordinates from a pasted Google Maps URL
 const extractCoordinatesFromUrl = (url) => {
   if (!url) return null;
   const regex = /@(-?\d+\.\d+),(-?\d+\.\d+)/;
   const match = url.match(regex);
-  if(match) {
-     return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+  if (match) {
+    return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
   }
   return null;
 };
@@ -45,48 +42,54 @@ function App() {
       return null;
     }
   });
-  const [authMode, setAuthMode] = useState("login"); 
+  const [authMode, setAuthMode] = useState("login");
   const [notification, setNotification] = useState("");
-  
+
   const [authForm, setAuthForm] = useState({ username: "", password: "", role: "customer" });
   const [newQueue, setNewQueue] = useState({ name: "", avgTime: 5, image: "", address: "", lat: "", lng: "", category: "Other" });
   const [searchQuery, setSearchQuery] = useState("");
-  
-  // Filter & Sort States
+
   const [filterCategory, setFilterCategory] = useState("All");
-  const [sortBy, setSortBy] = useState("default"); 
+  const [sortBy, setSortBy] = useState("default");
 
   const [editingQueue, setEditingQueue] = useState(null);
-  const [editingCustomerTime, setEditingCustomerTime] = useState(null); 
+  const [editingCustomerTime, setEditingCustomerTime] = useState(null);
   const [notifiedQueues, setNotifiedQueues] = useState([]);
 
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [processingActionId, setProcessingActionId] = useState(null); 
-  
+  // FIX 1: Track whether queues have loaded separately from auth page visibility.
+  // Auth page shows immediately; loading spinner only appears when user is logged in.
+  const [queuesLoaded, setQueuesLoaded] = useState(false);
+  const [processingActionId, setProcessingActionId] = useState(null);
+
   const [userLocation, setUserLocation] = useState(null);
   const [joinNotes, setJoinNotes] = useState({});
-
   const [dragState, setDragState] = useState({ queueId: null, index: null });
+
+  // FIX 2: AbortController ref so stale in-flight poll requests can be cancelled
+  // before they overwrite optimistic state updates.
+  const pollAbortRef = useRef(null);
 
   const getRemainingTime = (customer) => customer.expectedTime || 0;
 
   const handleReorder = async (queueId, newCustomersList) => {
     setProcessingActionId(queueId);
-    
-    setQueues(current => current.map(q => 
+    setQueues(current => current.map(q =>
       q._id === queueId ? { ...q, customers: newCustomersList } : q
     ));
-
     try {
-      await fetch(`${API_URL}/queues/${queueId}/reorder`, {
+      const res = await fetch(`${API_URL}/queues/${queueId}/reorder`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ customers: newCustomersList })
       });
+      if (res.ok) {
+        const updated = await res.json();
+        setQueues(current => current.map(q => q._id === queueId ? updated : q));
+      }
     } catch (err) {
       showNotification("Failed to save new queue order.");
-    } finally {
       await fetchQueues();
+    } finally {
       setProcessingActionId(null);
     }
   };
@@ -95,41 +98,30 @@ function App() {
     setDragState({ queueId, index });
     e.dataTransfer.effectAllowed = "move";
   };
-
-  const onDragOver = (e) => {
-    e.preventDefault();
-  };
-
+  const onDragOver = (e) => { e.preventDefault(); };
   const onDrop = (e, targetQueueId, dropIndex) => {
     e.preventDefault();
     if (dragState.queueId !== targetQueueId || dragState.index === null) return;
     if (dragState.index === dropIndex) return;
-
     const queue = queues.find(q => q._id === targetQueueId);
     if (!queue) return;
-    
     const newCustomers = [...(queue.customers || [])];
     const [draggedCustomer] = newCustomers.splice(dragState.index, 1);
     newCustomers.splice(dropIndex, 0, draggedCustomer);
-    
     handleReorder(targetQueueId, newCustomers);
     setDragState({ queueId: null, index: null });
   };
 
   const movePosition = (queueId, currentIndex, direction) => {
     if (processingActionId === queueId) return;
-    
     const queue = queues.find(q => q._id === queueId);
     if (!queue || !queue.customers) return;
-    
     const newIndex = currentIndex + direction;
     if (newIndex < 0 || newIndex >= queue.customers.length) return;
-
     const newCustomers = [...queue.customers];
     const temp = newCustomers[currentIndex];
     newCustomers[currentIndex] = newCustomers[newIndex];
     newCustomers[newIndex] = temp;
-
     handleReorder(queueId, newCustomers);
   };
 
@@ -141,7 +133,7 @@ function App() {
   const playNotificationSound = () => {
     try {
       const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-      audio.play().catch(() => console.log("Audio play blocked by browser interaction policies"));
+      audio.play().catch(() => {});
     } catch (err) {
       console.error(err);
     }
@@ -169,58 +161,40 @@ function App() {
     const coords = extractCoordinatesFromUrl(val);
     if (coords) {
       if (isEdit) {
-        setEditingQueue(prev => ({ ...prev, location: { ...prev.location, lat: coords.lat, lng: coords.lng, address: 'Extracting proper address...' } }));
+        setEditingQueue(prev => ({ ...prev, location: { ...prev.location, lat: coords.lat, lng: coords.lng, address: 'Extracting address...' } }));
       } else {
-        setNewQueue(prev => ({ ...prev, lat: coords.lat, lng: coords.lng, address: 'Extracting proper address...' }));
+        setNewQueue(prev => ({ ...prev, lat: coords.lat, lng: coords.lng, address: 'Extracting address...' }));
       }
-      
       try {
         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
         const data = await res.json();
-        
         const cleanAddress = data.display_name ? data.display_name.split(',').slice(0, 3).join(',') : "Pinned Map Location";
-        
         if (isEdit) {
           setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: cleanAddress } }));
         } else {
           setNewQueue(prev => ({ ...prev, address: cleanAddress }));
         }
-        showNotification("Location pinned and address named!");
+        showNotification("Location pinned!");
       } catch (e) {
         const fallback = "Pinned Map Location";
-        if (isEdit) {
-          setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: fallback } }));
-        } else {
-          setNewQueue(prev => ({ ...prev, address: fallback }));
-        }
+        if (isEdit) setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: fallback } }));
+        else setNewQueue(prev => ({ ...prev, address: fallback }));
       }
     }
   };
 
   const geocodeAddress = async (isEdit = false) => {
     const targetAddress = isEdit ? editingQueue.location?.address : newQueue.address;
-    
-    if (!targetAddress || targetAddress.trim() === '') {
-      showNotification("Please enter an address to search.");
-      return;
-    }
-    if (targetAddress.includes('http')) {
-      showNotification("Address is a link. Paste it directly to auto-extract.");
-      return;
-    }
-    
+    if (!targetAddress || targetAddress.trim() === '') { showNotification("Please enter an address."); return; }
+    if (targetAddress.includes('http')) { showNotification("Address is a link. Paste it directly to auto-extract."); return; }
     try {
       const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(targetAddress)}`);
       const data = await res.json();
-      
       if (data && data.length > 0) {
         const { lat, lon } = data[0];
-        if (isEdit) {
-          setEditingQueue(prev => ({ ...prev, location: { ...prev.location, lat: parseFloat(lat), lng: parseFloat(lon) } }));
-        } else {
-          setNewQueue(prev => ({ ...prev, lat: parseFloat(lat), lng: parseFloat(lon) }));
-        }
-        showNotification("Coordinates successfully loaded from address!");
+        if (isEdit) setEditingQueue(prev => ({ ...prev, location: { ...prev.location, lat: parseFloat(lat), lng: parseFloat(lon) } }));
+        else setNewQueue(prev => ({ ...prev, lat: parseFloat(lat), lng: parseFloat(lon) }));
+        showNotification("Coordinates loaded!");
       } else {
         showNotification("Location not found. Try a more specific address.");
       }
@@ -235,30 +209,18 @@ function App() {
         async (pos) => {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
-          
-          if (isEdit) {
-            setEditingQueue(prev => ({ ...prev, location: { ...prev.location, lat, lng, address: 'Finding current address...' } }));
-          } else {
-            setNewQueue(prev => ({ ...prev, lat, lng, address: 'Finding current address...' }));
-          }
-          showNotification("GPS Captured! Looking up address name...");
-
+          if (isEdit) setEditingQueue(prev => ({ ...prev, location: { ...prev.location, lat, lng, address: 'Finding address...' } }));
+          else setNewQueue(prev => ({ ...prev, lat, lng, address: 'Finding address...' }));
+          showNotification("GPS captured! Looking up address...");
           try {
             const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
             const data = await res.json();
             const cleanAddress = data.display_name ? data.display_name.split(',').slice(0, 3).join(',') : "Current Location";
-            
-            if (isEdit) {
-              setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: cleanAddress } }));
-            } else {
-              setNewQueue(prev => ({ ...prev, address: cleanAddress }));
-            }
+            if (isEdit) setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: cleanAddress } }));
+            else setNewQueue(prev => ({ ...prev, address: cleanAddress }));
           } catch (e) {
-            if (isEdit) {
-              setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: "Current Location" } }));
-            } else {
-              setNewQueue(prev => ({ ...prev, address: "Current Location" }));
-            }
+            if (isEdit) setEditingQueue(prev => ({ ...prev, location: { ...prev.location, address: "Current Location" } }));
+            else setNewQueue(prev => ({ ...prev, address: "Current Location" }));
           }
         },
         () => showNotification("Failed to get location.")
@@ -266,15 +228,16 @@ function App() {
     }
   };
 
-  const fetchQueues = async (isInitial = false) => {
+  // FIX 2 continued: fetchQueues accepts an AbortSignal so stale poll calls can be cancelled.
+  const fetchQueues = async (isInitial = false, signal = null) => {
     try {
-      const res = await fetch(`${API_URL}/queues`);
+      const res = await fetch(`${API_URL}/queues`, signal ? { signal } : {});
       const data = await res.json();
       setQueues(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error("Failed to fetch queues");
+      if (err.name !== 'AbortError') console.error("Failed to fetch queues");
     } finally {
-      if (isInitial) setIsInitialLoading(false);
+      if (isInitial) setQueuesLoaded(true);
     }
   };
 
@@ -286,15 +249,27 @@ function App() {
     if (currentUser?.role === 'customer' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => console.log("Location access denied.")
+        () => {}
       );
     }
   }, [currentUser]);
 
+  // FIX 2: Cancel any in-flight poll when an action is running to prevent
+  // stale responses from overwriting optimistic state updates.
   useEffect(() => {
     if (!editingQueue && !editingCustomerTime && !processingActionId) {
-      const interval = setInterval(() => fetchQueues(false), 5000); 
-      return () => clearInterval(interval);
+      const interval = setInterval(() => {
+        if (pollAbortRef.current) pollAbortRef.current.abort();
+        pollAbortRef.current = new AbortController();
+        fetchQueues(false, pollAbortRef.current.signal);
+      }, 5000);
+      return () => {
+        clearInterval(interval);
+        if (pollAbortRef.current) {
+          pollAbortRef.current.abort();
+          pollAbortRef.current = null;
+        }
+      };
     }
   }, [editingQueue, editingCustomerTime, processingActionId]);
 
@@ -302,10 +277,8 @@ function App() {
     if (currentUser?.role === 'customer') {
       let newNotified = [...notifiedQueues];
       let changed = false;
-
       queues.forEach(q => {
         const myPos = (q.customers || []).findIndex(c => c.username === currentUser.username);
-        
         if (myPos === 0 && !notifiedQueues.includes(q._id)) {
           showNotification(`It's your turn in ${q.name}! Please proceed.`);
           playNotificationSound();
@@ -316,23 +289,15 @@ function App() {
           changed = true;
         }
       });
-
-      if (changed) {
-        setNotifiedQueues(newNotified);
-      }
+      if (changed) setNotifiedQueues(newNotified);
     }
   }, [queues, currentUser, notifiedQueues]);
-
 
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     const { username, password, role } = authForm;
-    if (!username || !password) {
-      showNotification("Please fill in all fields.");
-      return;
-    }
-
-    setProcessingActionId('auth'); 
+    if (!username || !password) { showNotification("Please fill in all fields."); return; }
+    setProcessingActionId('auth');
     const endpoint = authMode === "register" ? "/auth/register" : "/auth/login";
     try {
       const res = await fetch(`${API_URL}${endpoint}`, {
@@ -341,13 +306,7 @@ function App() {
         body: JSON.stringify({ username, password, role }),
       });
       const data = await res.json();
-
-      if (!res.ok) {
-        showNotification(data.error || "An error occurred");
-        setProcessingActionId(null);
-        return;
-      }
-
+      if (!res.ok) { showNotification(data.error || "An error occurred"); return; }
       if (authMode === "register") {
         showNotification("Account created. Please log in.");
         setAuthMode("login");
@@ -374,10 +333,9 @@ function App() {
   const createQueue = async (e) => {
     e.preventDefault();
     if (!newQueue.name.trim()) return;
-    
     setProcessingActionId('create');
     try {
-      await fetch(`${API_URL}/queues`, {
+      const res = await fetch(`${API_URL}/queues`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -389,11 +347,12 @@ function App() {
           location: { address: newQueue.address, lat: newQueue.lat, lng: newQueue.lng }
         }),
       });
+      const created = await res.json();
+      setQueues(current => [...current, created]);
       setNewQueue({ name: "", avgTime: 5, image: "", address: "", lat: "", lng: "", category: "Other" });
       const fileInput = document.getElementById("createQueueFileInput");
-      if(fileInput) fileInput.value = "";
+      if (fileInput) fileInput.value = "";
       showNotification("Queue created successfully.");
-      await fetchQueues();
     } catch (err) {
       showNotification("Failed to create queue.");
     } finally {
@@ -404,10 +363,9 @@ function App() {
   const updateQueueDetails = async (e) => {
     e.preventDefault();
     if (!editingQueue) return;
-    
     setProcessingActionId(editingQueue._id);
     try {
-      await fetch(`${API_URL}/queues/${editingQueue._id}`, {
+      const res = await fetch(`${API_URL}/queues/${editingQueue._id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -418,9 +376,10 @@ function App() {
           location: editingQueue.location
         }),
       });
+      const updated = await res.json();
+      setQueues(current => current.map(q => q._id === editingQueue._id ? updated : q));
       setEditingQueue(null);
       showNotification("Queue updated.");
-      await fetchQueues();
     } catch (err) {
       showNotification("Failed to update queue.");
     } finally {
@@ -431,61 +390,78 @@ function App() {
   const updateCustomerTime = async (queueId, username, time) => {
     if (!time || isNaN(time)) return;
     setProcessingActionId(queueId);
-
     setQueues(current => current.map(q => {
       if (q._id !== queueId) return q;
       return {
         ...q,
-        customers: (q.customers || []).map(c => c.username === username ? { ...c, expectedTime: parseInt(time) } : c)
+        customers: (q.customers || []).map(c =>
+          c.username === username ? { ...c, expectedTime: parseInt(time) } : c
+        )
       };
     }));
-
     try {
-      await fetch(`${API_URL}/queues/${queueId}/customer-time`, {
+      const res = await fetch(`${API_URL}/queues/${queueId}/customer-time`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, expectedTime: parseInt(time) }),
       });
+      const updated = await res.json();
+      setQueues(current => current.map(q => q._id === queueId ? updated : q));
     } catch (err) {
       showNotification("Failed to update time.");
-    } finally {
       await fetchQueues();
+    } finally {
       setProcessingActionId(null);
     }
   };
 
   const deleteQueue = async (id) => {
     setProcessingActionId(id);
+    setQueues(current => current.filter(q => q._id !== id));
     try {
-      setQueues(current => current.filter(q => q._id !== id));
       await fetch(`${API_URL}/queues/${id}`, { method: "DELETE" });
-    } finally {
+    } catch (err) {
+      showNotification("Failed to delete queue.");
       await fetchQueues();
+    } finally {
       setProcessingActionId(null);
     }
   };
 
   const toggleQueueStatus = async (id) => {
     setProcessingActionId(id);
+    setQueues(current => current.map(q =>
+      q._id === id ? { ...q, status: q.status === 'active' ? 'paused' : 'active' } : q
+    ));
     try {
-      setQueues(current => current.map(q => 
-        q._id === id ? { ...q, status: q.status === 'active' ? 'paused' : 'active' } : q
-      ));
-      await fetch(`${API_URL}/queues/${id}/status`, { method: "PUT" });
-    } finally {
+      const res = await fetch(`${API_URL}/queues/${id}/status`, { method: "PUT" });
+      const updated = await res.json();
+      setQueues(current => current.map(q => q._id === id ? updated : q));
+    } catch (err) {
+      showNotification("Failed to update status.");
       await fetchQueues();
+    } finally {
       setProcessingActionId(null);
     }
   };
 
+  // FIX 3: No longer calls fetchQueues() after action — uses the API response directly.
+  // This eliminates the race condition where a stale poll or refetch could temporarily
+  // revert the UI to its pre-action state (the "flicker" bug).
   const performQueueAction = async (id, action, targetUsername = null, note = '') => {
     const username = targetUsername || currentUser.username;
     setProcessingActionId(id);
 
+    // Cancel any in-flight poll so it can't overwrite our optimistic update
+    if (pollAbortRef.current) {
+      pollAbortRef.current.abort();
+      pollAbortRef.current = null;
+    }
+
+    // Optimistic update — instantly reflects in the UI
     setQueues(currentQueues => currentQueues.map(q => {
       if (q._id !== id) return q;
       const updatedQ = { ...q, customers: [...(q.customers || [])] };
-      
       if (action === 'next' && updatedQ.customers.length > 0) {
         updatedQ.customers.shift();
         updatedQ.totalServed = (updatedQ.totalServed || 0) + 1;
@@ -500,17 +476,23 @@ function App() {
     }));
 
     try {
-      await fetch(`${API_URL}/queues/${id}/action`, {
+      const res = await fetch(`${API_URL}/queues/${id}/action`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, username, note }),
       });
+      if (res.ok) {
+        // Reconcile with the definitive server state — no extra round-trip needed
+        const updatedQueue = await res.json();
+        setQueues(current => current.map(q => q._id === id ? updatedQueue : q));
+      }
       if (action === 'join') setJoinNotes(prev => ({ ...prev, [id]: '' }));
     } catch (err) {
       console.error(err);
+      // On network error, revert by refetching
+      await fetchQueues();
     } finally {
-      await fetchQueues(); 
-      setProcessingActionId(null); 
+      setProcessingActionId(null);
     }
   };
 
@@ -519,10 +501,8 @@ function App() {
     const nameMatch = q.name ? q.name.toLowerCase().includes(searchLower) : false;
     const managerMatch = q.manager ? q.manager.toLowerCase().includes(searchLower) : false;
     const matchesSearch = nameMatch || managerMatch;
-    
     const itemCategory = q.category || "Other";
     const matchesCategory = filterCategory === "All" || itemCategory === filterCategory;
-    
     return matchesSearch && matchesCategory;
   });
 
@@ -540,8 +520,9 @@ function App() {
     filteredQueues.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }
 
-
-  if (isInitialLoading) {
+  // FIX 1: Auth page is NEVER blocked by queue loading — it renders immediately.
+  // Only show the spinner when the user IS logged in and queues haven't arrived yet.
+  if (currentUser && !queuesLoaded) {
     return (
       <div className="app-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', color: 'var(--text-muted)' }}>
@@ -562,21 +543,13 @@ function App() {
       )}
 
       {!currentUser ? (
-        
-        /* --- NEW FULL-SCREEN AESTHETIC AUTH PAGE --- */
         <div className="auth-wrapper">
-          {/* Your Custom Animated Background */}
           <div className="auth-bg"></div>
-          
-          {/* Aesthetic Floating Orbs */}
           <div className="ambient-orb orb-1"></div>
           <div className="ambient-orb orb-2"></div>
-          
-          {/* Dark Overlay so text is readable over any image */}
           <div className="auth-overlay"></div>
-          
+
           <div className="animate-slide-up" style={{ textAlign: 'center', marginBottom: '3rem', maxWidth: '600px', zIndex: 1 }}>
-            {/* UPDATED: Gradient colors now match the purple -> blue -> mint green of your image */}
             <h1 className="animate-gradient-text animate-float" style={{ fontSize: '4.5rem', fontWeight: 800, marginBottom: '0.5rem', letterSpacing: '-0.05em', background: 'linear-gradient(90deg, #828DF8, #62B8F6, #2ED5B0, #828DF8)', backgroundSize: '300% 300%', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
               QueueSys.
             </h1>
@@ -601,7 +574,6 @@ function App() {
                   <input
                     type="text"
                     className="premium-input"
-                    /* Adjusted input background to match the more transparent card */
                     style={{ paddingLeft: '2.5rem', background: 'rgba(255,255,255,0.5)', borderColor: 'rgba(0,0,0,0.1)' }}
                     value={authForm.username}
                     onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
@@ -610,7 +582,7 @@ function App() {
                   />
                 </div>
               </div>
-              
+
               <div className="input-group" style={{ marginBottom: '1.5rem' }}>
                 <label className="input-label" style={{ color: '#3f3f46' }}>Password</label>
                 <div style={{ position: 'relative' }}>
@@ -653,7 +625,7 @@ function App() {
             </form>
 
             <div style={{ textAlign: 'center', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
-              <button 
+              <button
                 type="button"
                 style={{ background: 'none', border: 'none', color: '#3f3f46', fontSize: '0.875rem', cursor: 'pointer', fontWeight: 500 }}
                 onClick={() => {
@@ -670,9 +642,8 @@ function App() {
 
       ) : (
 
-        /* --- DASHBOARD COMPONENT --- */
         <div className="app-container animate-fade-in">
-          
+
           <header className="app-header animate-slide-up" style={{ paddingBottom: '1.5rem' }}>
             <div>
               <h1 className="brand animate-gradient-text" style={{ fontSize: '2.25rem', display: 'inline-block' }}>QueueSys.</h1>
@@ -699,7 +670,7 @@ function App() {
                 <form onSubmit={createQueue} className="form-grid">
                   <div className="input-group" style={{ marginBottom: 0 }}>
                     <label className="input-label">Queue Name</label>
-                    <input 
+                    <input
                       className="premium-input"
                       placeholder="e.g. Genius Bar"
                       value={newQueue.name}
@@ -708,26 +679,23 @@ function App() {
                       disabled={processingActionId === 'create'}
                     />
                   </div>
-                  
+
                   <div className="input-group" style={{ marginBottom: 0 }}>
                     <label className="input-label">Category</label>
-                    <select 
+                    <select
                       className="premium-input"
                       value={newQueue.category}
                       onChange={(e) => setNewQueue({ ...newQueue, category: e.target.value })}
                       disabled={processingActionId === 'create'}
                     >
-                      {CATEGORIES.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
+                      {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                     </select>
                   </div>
 
                   <div className="input-group" style={{ marginBottom: 0 }}>
                     <label className="input-label">Base Time (m)</label>
-                    <input 
-                      type="number"
-                      min="1"
+                    <input
+                      type="number" min="1"
                       className="premium-input"
                       value={newQueue.avgTime}
                       onChange={(e) => setNewQueue({ ...newQueue, avgTime: e.target.value })}
@@ -738,7 +706,7 @@ function App() {
 
                   <div className="input-group" style={{ marginBottom: 0 }}>
                     <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>Location (Address & Coordinates)</span>
+                      <span>Location</span>
                       <a href="https://maps.google.com" target="_blank" rel="noreferrer" style={{ fontSize: '0.75rem', color: 'var(--text-main)', textDecoration: 'underline' }}>Open Maps</a>
                     </label>
                     <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
@@ -749,53 +717,28 @@ function App() {
                           value={newQueue.address}
                           onChange={(e) => {
                             const val = e.target.value;
-                            if (val.includes('http') && val.includes('@')) {
-                              handleUrlPaste(val, false);
-                            } else {
-                              setNewQueue({ ...newQueue, address: val });
-                            }
+                            if (val.includes('http') && val.includes('@')) handleUrlPaste(val, false);
+                            else setNewQueue({ ...newQueue, address: val });
                           }}
                           disabled={processingActionId === 'create'}
                         />
-                        <button type="button" className="btn btn-outline" onClick={() => geocodeAddress(false)} disabled={processingActionId === 'create' || !newQueue.address} title="Find Coordinates for Address" style={{ padding: '0 0.75rem' }}>
+                        <button type="button" className="btn btn-outline" onClick={() => geocodeAddress(false)} disabled={processingActionId === 'create' || !newQueue.address} style={{ padding: '0 0.75rem' }}>
                           <Search size={18} />
                         </button>
-                        <button type="button" className="btn btn-outline" onClick={() => captureManagerLocation(false)} disabled={processingActionId === 'create'} title="Use My Current GPS Location" style={{ padding: '0 0.75rem' }}>
+                        <button type="button" className="btn btn-outline" onClick={() => captureManagerLocation(false)} disabled={processingActionId === 'create'} style={{ padding: '0 0.75rem' }}>
                           <MapPin size={18} />
                         </button>
                       </div>
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <input
-                          type="number" step="any"
-                          className="premium-input text-sm"
-                          placeholder="Latitude"
-                          value={newQueue.lat || ''}
-                          onChange={(e) => setNewQueue({ ...newQueue, lat: e.target.value ? parseFloat(e.target.value) : '' })}
-                          disabled={processingActionId === 'create'}
-                        />
-                        <input
-                          type="number" step="any"
-                          className="premium-input text-sm"
-                          placeholder="Longitude"
-                          value={newQueue.lng || ''}
-                          onChange={(e) => setNewQueue({ ...newQueue, lng: e.target.value ? parseFloat(e.target.value) : '' })}
-                          disabled={processingActionId === 'create'}
-                        />
+                        <input type="number" step="any" className="premium-input text-sm" placeholder="Latitude" value={newQueue.lat || ''} onChange={(e) => setNewQueue({ ...newQueue, lat: e.target.value ? parseFloat(e.target.value) : '' })} disabled={processingActionId === 'create'} />
+                        <input type="number" step="any" className="premium-input text-sm" placeholder="Longitude" value={newQueue.lng || ''} onChange={(e) => setNewQueue({ ...newQueue, lng: e.target.value ? parseFloat(e.target.value) : '' })} disabled={processingActionId === 'create'} />
                       </div>
                     </div>
                   </div>
 
                   <div className="input-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                     <label className="input-label">Cover Image</label>
-                    <input 
-                      id="createQueueFileInput"
-                      type="file"
-                      accept="image/*"
-                      className="premium-input"
-                      style={{ padding: '0.6rem 1rem' }}
-                      onChange={handleImageUpload}
-                      disabled={processingActionId === 'create'}
-                    />
+                    <input id="createQueueFileInput" type="file" accept="image/*" className="premium-input" style={{ padding: '0.6rem 1rem' }} onChange={handleImageUpload} disabled={processingActionId === 'create'} />
                   </div>
 
                   <div className="btn-wrapper" style={{ gridColumn: '1 / -1' }}>
@@ -814,8 +757,6 @@ function App() {
               <div className="grid-container">
                 {queues.filter(q => q.manager === currentUser.username).map(queue => (
                   <div key={queue._id} className="animate-fade-in" style={{ display: 'flex', height: '100%' }}>
-                    
-                    {/* EDIT MODE */}
                     {editingQueue && editingQueue._id === queue._id ? (
                       <div className="premium-card" style={{ width: '100%' }}>
                         <div className="card-header">
@@ -824,109 +765,45 @@ function App() {
                         <form onSubmit={updateQueueDetails} className="card-body" style={{ display: 'flex', flexDirection: 'column' }}>
                           <div className="input-group">
                             <label className="input-label">Queue Name</label>
-                            <input 
-                              className="premium-input" 
-                              value={editingQueue.name} 
-                              onChange={(e) => setEditingQueue({...editingQueue, name: e.target.value})} 
-                              required
-                              disabled={processingActionId === queue._id}
-                            />
+                            <input className="premium-input" value={editingQueue.name} onChange={(e) => setEditingQueue({ ...editingQueue, name: e.target.value })} required disabled={processingActionId === queue._id} />
                           </div>
-
                           <div className="input-group">
                             <label className="input-label">Category</label>
-                            <select 
-                              className="premium-input"
-                              value={editingQueue.category || "Other"}
-                              onChange={(e) => setEditingQueue({ ...editingQueue, category: e.target.value })}
-                              disabled={processingActionId === queue._id}
-                            >
-                              {CATEGORIES.map(cat => (
-                                <option key={cat} value={cat}>{cat}</option>
-                              ))}
+                            <select className="premium-input" value={editingQueue.category || "Other"} onChange={(e) => setEditingQueue({ ...editingQueue, category: e.target.value })} disabled={processingActionId === queue._id}>
+                              {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                             </select>
                           </div>
-
                           <div className="input-group">
                             <label className="input-label">Base Wait Time</label>
-                            <input 
-                              type="number" min="1"
-                              className="premium-input" 
-                              value={editingQueue.avgTime} 
-                              onChange={(e) => setEditingQueue({...editingQueue, avgTime: e.target.value})} 
-                              required
-                              disabled={processingActionId === queue._id}
-                            />
+                            <input type="number" min="1" className="premium-input" value={editingQueue.avgTime} onChange={(e) => setEditingQueue({ ...editingQueue, avgTime: e.target.value })} required disabled={processingActionId === queue._id} />
                           </div>
-
                           <div className="input-group">
                             <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span>Location (Address & Coordinates)</span>
+                              <span>Location</span>
                               <a href="https://maps.google.com" target="_blank" rel="noreferrer" style={{ fontSize: '0.75rem', color: 'var(--text-main)', textDecoration: 'underline' }}>Open Maps</a>
                             </label>
                             <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
                               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                <input 
-                                  className="premium-input"
-                                  placeholder="Address or Google Maps Link"
-                                  value={editingQueue.location?.address || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (val.includes('http') && val.includes('@')) {
-                                      handleUrlPaste(val, true);
-                                    } else {
-                                      setEditingQueue({ 
-                                        ...editingQueue, 
-                                        location: { ...(editingQueue.location || {}), address: val } 
-                                      });
-                                    }
-                                  }}
-                                  disabled={processingActionId === queue._id}
-                                />
-                                <button type="button" className="btn btn-outline" onClick={() => geocodeAddress(true)} disabled={processingActionId === queue._id} title="Find Coordinates for Address" style={{ padding: '0 0.75rem' }}>
-                                  <Search size={18} />
-                                </button>
-                                <button type="button" className="btn btn-outline" onClick={() => captureManagerLocation(true)} disabled={processingActionId === queue._id} title="Use Current GPS Location" style={{ padding: '0 0.75rem' }}>
-                                  <MapPin size={18} />
-                                </button>
+                                <input className="premium-input" placeholder="Address or Google Maps Link" value={editingQueue.location?.address || ''} onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val.includes('http') && val.includes('@')) handleUrlPaste(val, true);
+                                  else setEditingQueue({ ...editingQueue, location: { ...(editingQueue.location || {}), address: val } });
+                                }} disabled={processingActionId === queue._id} />
+                                <button type="button" className="btn btn-outline" onClick={() => geocodeAddress(true)} disabled={processingActionId === queue._id} style={{ padding: '0 0.75rem' }}><Search size={18} /></button>
+                                <button type="button" className="btn btn-outline" onClick={() => captureManagerLocation(true)} disabled={processingActionId === queue._id} style={{ padding: '0 0.75rem' }}><MapPin size={18} /></button>
                               </div>
                               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                <input
-                                  type="number" step="any"
-                                  className="premium-input text-sm"
-                                  placeholder="Latitude"
-                                  value={editingQueue.location?.lat ?? ''}
-                                  onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...(editingQueue.location || {}), lat: e.target.value ? parseFloat(e.target.value) : null } })}
-                                  disabled={processingActionId === queue._id}
-                                />
-                                <input
-                                  type="number" step="any"
-                                  className="premium-input text-sm"
-                                  placeholder="Longitude"
-                                  value={editingQueue.location?.lng ?? ''}
-                                  onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...(editingQueue.location || {}), lng: e.target.value ? parseFloat(e.target.value) : null } })}
-                                  disabled={processingActionId === queue._id}
-                                />
+                                <input type="number" step="any" className="premium-input text-sm" placeholder="Latitude" value={editingQueue.location?.lat ?? ''} onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...(editingQueue.location || {}), lat: e.target.value ? parseFloat(e.target.value) : null } })} disabled={processingActionId === queue._id} />
+                                <input type="number" step="any" className="premium-input text-sm" placeholder="Longitude" value={editingQueue.location?.lng ?? ''} onChange={(e) => setEditingQueue({ ...editingQueue, location: { ...(editingQueue.location || {}), lng: e.target.value ? parseFloat(e.target.value) : null } })} disabled={processingActionId === queue._id} />
                               </div>
                             </div>
                           </div>
-
                           <div className="input-group" style={{ marginBottom: 'auto' }}>
                             <label className="input-label">Cover Image</label>
-                            <input 
-                              type="file" accept="image/*" 
-                              className="premium-input" style={{ padding: '0.6rem 1rem' }}
-                              onChange={handleEditImageUpload} 
-                              disabled={processingActionId === queue._id}
-                            />
+                            <input type="file" accept="image/*" className="premium-input" style={{ padding: '0.6rem 1rem' }} onChange={handleEditImageUpload} disabled={processingActionId === queue._id} />
                             {editingQueue.image && (
-                              <button 
-                                type="button" 
-                                className="btn-icon" style={{ alignSelf: 'flex-start', marginTop: '0.5rem', color: 'var(--accent-danger)' }}
-                                onClick={() => setEditingQueue({...editingQueue, image: ""})}
-                                disabled={processingActionId === queue._id}
-                              >
-                                <Trash2 size={14} style={{ marginRight: '0.25rem' }}/> Remove Photo
+                              <button type="button" className="btn-icon" style={{ alignSelf: 'flex-start', marginTop: '0.5rem', color: 'var(--accent-danger)' }} onClick={() => setEditingQueue({ ...editingQueue, image: "" })} disabled={processingActionId === queue._id}>
+                                <Trash2 size={14} style={{ marginRight: '0.25rem' }} /> Remove Photo
                               </button>
                             )}
                           </div>
@@ -938,17 +815,13 @@ function App() {
                           </div>
                         </form>
                       </div>
-
                     ) : (
-
-                      // NORMAL MANAGER CARD VIEW
                       <div className="premium-card" style={{ width: '100%' }}>
                         {queue.image && (
                           <div style={{ height: '140px', width: '100%', borderBottom: '1px solid var(--border)' }}>
                             <img src={queue.image} alt={queue.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                           </div>
                         )}
-
                         <div className="card-header">
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
                             <div>
@@ -957,12 +830,7 @@ function App() {
                                 <Tag size={10} /> {queue.category || 'Other'}
                               </span>
                             </div>
-                            <button 
-                              className="btn-icon"
-                              onClick={() => toggleQueueStatus(queue._id)}
-                              title={queue.status === 'active' ? 'Pause Queue' : 'Resume Queue'}
-                              disabled={processingActionId === queue._id}
-                            >
+                            <button className="btn-icon" onClick={() => toggleQueueStatus(queue._id)} title={queue.status === 'active' ? 'Pause Queue' : 'Resume Queue'} disabled={processingActionId === queue._id}>
                               {queue.status === 'active' ? <Pause size={18} /> : <Play size={18} />}
                             </button>
                           </div>
@@ -971,31 +839,28 @@ function App() {
                               {queue.status === 'active' ? 'Receiving' : 'Paused'}
                             </span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--text-muted)' }}>
-                              <Clock size={14} />
-                              <span className="text-sm">Base: {queue.avgTime}m</span>
+                              <Clock size={14} /><span className="text-sm">Base: {queue.avgTime}m</span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--text-muted)' }}>
-                              <CheckCircle2 size={14} />
-                              <span className="text-sm">Served: {queue.totalServed || 0}</span>
+                              <CheckCircle2 size={14} /><span className="text-sm">Served: {queue.totalServed || 0}</span>
                             </div>
                           </div>
                         </div>
-                        
+
                         <div className="card-body" style={{ padding: 0, overflowY: 'auto', maxHeight: '300px' }}>
                           {!queue.customers || queue.customers.length === 0 ? (
                             <div style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-light)' }}>
-                              <Users size={32} style={{ marginBottom: '0.5rem', opacity: 0.5 }}/>
+                              <Users size={32} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
                               <p className="text-sm">Queue is empty</p>
                             </div>
                           ) : (
                             <ul className="customer-list">
                               {queue.customers.map((c, i) => (
-                                <li 
+                                <li
                                   key={c.username}
                                   className="customer-item"
-                                  style={{ 
-                                    paddingLeft: '0.75rem', 
-                                    paddingRight: '1.5rem',
+                                  style={{
+                                    paddingLeft: '0.75rem', paddingRight: '1.5rem',
                                     opacity: processingActionId === queue._id ? 0.6 : 1,
                                     border: dragState.index === i && dragState.queueId === queue._id ? '2px dashed var(--text-muted)' : 'none'
                                   }}
@@ -1006,77 +871,38 @@ function App() {
                                 >
                                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flexDirection: 'column', width: '100%' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                                      
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginRight: '0.25rem' }}>
-                                          <button 
-                                            className="btn-icon" 
-                                            style={{ padding: 0, height: '14px', color: i === 0 ? 'transparent' : 'var(--text-muted)' }}
-                                            onClick={() => movePosition(queue._id, i, -1)}
-                                            disabled={i === 0 || processingActionId === queue._id}
-                                          >
-                                            <ChevronUp size={14} />
-                                          </button>
-                                          <GripVertical size={14} style={{ cursor: 'grab', color: 'var(--text-light)', margin: '2px 0' }} title="Drag to reorder" />
-                                          <button 
-                                            className="btn-icon" 
-                                            style={{ padding: 0, height: '14px', color: i === queue.customers.length - 1 ? 'transparent' : 'var(--text-muted)' }}
-                                            onClick={() => movePosition(queue._id, i, 1)}
-                                            disabled={i === queue.customers.length - 1 || processingActionId === queue._id}
-                                          >
-                                            <ChevronDown size={14} />
-                                          </button>
+                                          <button className="btn-icon" style={{ padding: 0, height: '14px', color: i === 0 ? 'transparent' : 'var(--text-muted)' }} onClick={() => movePosition(queue._id, i, -1)} disabled={i === 0 || processingActionId === queue._id}><ChevronUp size={14} /></button>
+                                          <GripVertical size={14} style={{ cursor: 'grab', color: 'var(--text-light)', margin: '2px 0' }} />
+                                          <button className="btn-icon" style={{ padding: 0, height: '14px', color: i === queue.customers.length - 1 ? 'transparent' : 'var(--text-muted)' }} onClick={() => movePosition(queue._id, i, 1)} disabled={i === queue.customers.length - 1 || processingActionId === queue._id}><ChevronDown size={14} /></button>
                                         </div>
-
                                         <span className="text-muted text-sm" style={{ width: '20px', textAlign: 'right', marginRight: '4px' }}>{i + 1}.</span>
                                         <span className={`text-sm ${i === 0 ? 'font-medium' : ''}`}>{c.username}</span>
                                       </div>
-                                      
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                         {editingCustomerTime?.queueId === queue._id && editingCustomerTime?.username === c.username ? (
-                                          <input 
+                                          <input
                                             type="number"
                                             className="time-editor-input text-sm"
                                             value={editingCustomerTime.time}
                                             onChange={(e) => setEditingCustomerTime({ ...editingCustomerTime, time: e.target.value })}
                                             autoFocus
                                             disabled={processingActionId === queue._id}
-                                            onBlur={() => {
-                                              updateCustomerTime(queue._id, c.username, editingCustomerTime.time);
-                                              setEditingCustomerTime(null);
-                                            }}
-                                            onKeyDown={(e) => {
-                                              if (e.key === 'Enter') {
-                                                updateCustomerTime(queue._id, c.username, editingCustomerTime.time);
-                                                setEditingCustomerTime(null);
-                                              }
-                                            }}
+                                            onBlur={() => { updateCustomerTime(queue._id, c.username, editingCustomerTime.time); setEditingCustomerTime(null); }}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') { updateCustomerTime(queue._id, c.username, editingCustomerTime.time); setEditingCustomerTime(null); } }}
                                           />
                                         ) : (
-                                          <div 
-                                            className="time-editor-trigger" 
-                                            onClick={() => {
-                                              if(processingActionId !== queue._id) {
-                                                setEditingCustomerTime({ queueId: queue._id, username: c.username, time: getRemainingTime(c) })
-                                              }
-                                            }}
-                                          >
+                                          <div className="time-editor-trigger" onClick={() => { if (processingActionId !== queue._id) setEditingCustomerTime({ queueId: queue._id, username: c.username, time: getRemainingTime(c) }); }}>
                                             <span className="text-sm font-medium">{getRemainingTime(c)}m</span>
                                             <PencilLine size={12} className="text-muted" />
                                           </div>
                                         )}
-
-                                        <button 
-                                          className="btn-icon" style={{ padding: '0.25rem' }}
-                                          onClick={() => performQueueAction(queue._id, 'remove', c.username)}
-                                          title="Remove User"
-                                          disabled={processingActionId === queue._id}
-                                        >
+                                        <button className="btn-icon" style={{ padding: '0.25rem' }} onClick={() => performQueueAction(queue._id, 'remove', c.username)} title="Remove User" disabled={processingActionId === queue._id}>
                                           <Trash2 size={14} />
                                         </button>
                                       </div>
                                     </div>
-
                                     {c.note && (
                                       <div style={{ paddingLeft: '3.75rem', fontSize: '0.75rem', color: '#6b7280', fontStyle: 'italic', marginTop: '-4px' }}>
                                         "{c.note}"
@@ -1090,31 +916,17 @@ function App() {
                         </div>
 
                         <div className="card-footer">
-                          <button 
-                            className="btn btn-primary" style={{ flexGrow: 1 }}
-                            disabled={!queue.customers || queue.customers.length === 0 || processingActionId === queue._id}
-                            onClick={() => performQueueAction(queue._id, 'next')}
-                          >
+                          <button className="btn btn-primary" style={{ flexGrow: 1 }} disabled={!queue.customers || queue.customers.length === 0 || processingActionId === queue._id} onClick={() => performQueueAction(queue._id, 'next')}>
                             {processingActionId === queue._id ? <><Loader2 size={16} className="animate-spin" /> Calling...</> : 'Call Next'}
                           </button>
-                          <button 
-                            className="btn btn-outline" style={{ padding: '0.75rem' }}
-                            onClick={() => setEditingQueue(queue)} 
-                            title="Edit Details"
-                            disabled={processingActionId === queue._id}
-                          >
+                          <button className="btn btn-outline" style={{ padding: '0.75rem' }} onClick={() => setEditingQueue(queue)} title="Edit Details" disabled={processingActionId === queue._id}>
                             <PencilLine size={18} />
                           </button>
-                          <button 
-                            className="btn btn-danger" style={{ padding: '0.75rem' }}
-                            onClick={() => deleteQueue(queue._id)} title="Delete Queue"
-                            disabled={processingActionId === queue._id}
-                          >
+                          <button className="btn btn-danger" style={{ padding: '0.75rem' }} onClick={() => deleteQueue(queue._id)} title="Delete Queue" disabled={processingActionId === queue._id}>
                             <Trash2 size={18} />
                           </button>
                         </div>
                       </div>
-
                     )}
                   </div>
                 ))}
@@ -1125,56 +937,28 @@ function App() {
           {/* CUSTOMER VIEW */}
           {currentUser.role === 'customer' && (
             <div className="animate-slide-up" style={{ animationDelay: '0.1s' }}>
-              {/* FILTER BAR ROW */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
                 <h3 style={{ fontSize: '1.25rem' }}>Find a Queue</h3>
-                
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', background: '#fff', padding: '1rem', borderRadius: '12px', border: '1px solid #eaeaea', boxShadow: '0 2px 10px rgba(0,0,0,0.02)' }}>
-                  
-                  {/* Search Filter */}
                   <div style={{ position: 'relative', flexGrow: 1, minWidth: '200px' }}>
                     <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }} />
-                    <input 
-                      type="text" 
-                      className="premium-input" 
-                      style={{ paddingLeft: '2.25rem', margin: 0 }}
-                      placeholder="Search by manager or queue name..." 
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                    />
+                    <input type="text" className="premium-input" style={{ paddingLeft: '2.25rem', margin: 0 }} placeholder="Search by manager or queue name..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                   </div>
-
-                  {/* Category Filter */}
                   <div style={{ position: 'relative', minWidth: '150px' }}>
                     <Tag size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }} />
-                    <select 
-                      className="premium-input"
-                      style={{ paddingLeft: '2.25rem', margin: 0, cursor: 'pointer' }}
-                      value={filterCategory}
-                      onChange={(e) => setFilterCategory(e.target.value)}
-                    >
+                    <select className="premium-input" style={{ paddingLeft: '2.25rem', margin: 0, cursor: 'pointer' }} value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
                       <option value="All">All Categories</option>
-                      {CATEGORIES.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
+                      {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                     </select>
                   </div>
-
-                  {/* Sort Controls */}
                   <div style={{ position: 'relative', minWidth: '150px' }}>
                     <SlidersHorizontal size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }} />
-                    <select 
-                      className="premium-input"
-                      style={{ paddingLeft: '2.25rem', margin: 0, cursor: 'pointer' }}
-                      value={sortBy}
-                      onChange={(e) => setSortBy(e.target.value)}
-                    >
+                    <select className="premium-input" style={{ paddingLeft: '2.25rem', margin: 0, cursor: 'pointer' }} value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
                       <option value="default">Sort: Default</option>
                       <option value="name">Sort: Name (A-Z)</option>
                       {userLocation && <option value="nearest">Sort: Nearest</option>}
                     </select>
                   </div>
-
                 </div>
               </div>
 
@@ -1185,60 +969,44 @@ function App() {
                     <p>No queues found matching your filters.</p>
                   </div>
                 )}
-                
+
                 {filteredQueues.map((queue, idx) => {
                   const customersArray = queue.customers || [];
                   const myPos = customersArray.findIndex(c => c.username === currentUser.username);
                   const inQueue = myPos !== -1;
-                  
                   const totalQueueWait = customersArray.reduce((sum, c) => sum + (c.expectedTime || 0), 0);
-
                   let estimatedWait = 0;
                   if (myPos > 0) {
-                    for (let i = 0; i < myPos; i++) {
-                      estimatedWait += customersArray[i].expectedTime || 0;
-                    }
+                    for (let i = 0; i < myPos; i++) estimatedWait += customersArray[i].expectedTime || 0;
                   }
-
-                  const distance = queue.location?.lat && queue.location?.lng && userLocation?.lat && userLocation?.lng 
-                    ? calculateDistance(userLocation.lat, userLocation.lng, queue.location.lat, queue.location.lng) 
+                  const distance = queue.location?.lat && queue.location?.lng && userLocation?.lat && userLocation?.lng
+                    ? calculateDistance(userLocation.lat, userLocation.lng, queue.location.lat, queue.location.lng)
                     : null;
-                  
+
                   return (
                     <div key={queue._id} className="animate-slide-up" style={{ display: 'flex', height: '100%', flexDirection: 'column', animationDelay: `${(idx % 5) * 0.1}s` }}>
-                      <div 
-                        className="premium-card" 
-                        style={{
-                          transition: 'all 0.3s ease',
-                          boxShadow: myPos === 0 ? '0 0 0 4px rgba(16, 185, 129, 0.2)' : '0 4px 20px rgba(0,0,0,0.04)',
-                          borderColor: inQueue && myPos !== 0 ? '#18181b' : 'transparent',
-                          border: '1px solid #eaeaea',
-                          borderRadius: '16px',
-                          background: '#fff',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          height: '100%',
-                          opacity: processingActionId === queue._id ? 0.7 : 1
-                        }}
-                      >
-                        {/* 1. TURN BANNER */}
+                      <div className="premium-card" style={{
+                        transition: 'all 0.3s ease',
+                        boxShadow: myPos === 0 ? '0 0 0 4px rgba(16, 185, 129, 0.2)' : '0 4px 20px rgba(0,0,0,0.04)',
+                        borderColor: inQueue && myPos !== 0 ? '#18181b' : 'transparent',
+                        border: '1px solid #eaeaea', borderRadius: '16px', background: '#fff',
+                        display: 'flex', flexDirection: 'column', height: '100%',
+                        opacity: processingActionId === queue._id ? 0.7 : 1
+                      }}>
                         {myPos === 0 && (
                           <div className="animate-fade-in" style={{ background: '#10b981', color: 'white', padding: '10px', textAlign: 'center', fontWeight: '600', fontSize: '0.8rem', letterSpacing: '1px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                             <CheckCircle size={16} /> YOUR TURN
                           </div>
                         )}
 
-                        {/* 2. IMAGE HERO WITH GRADIENT */}
                         {queue.image ? (
                           <div style={{ height: '160px', width: '100%', position: 'relative' }}>
                             <img src={queue.image} alt={queue.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderTopLeftRadius: '15px', borderTopRightRadius: '15px' }} />
                             <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '70%', background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%)' }}></div>
-                            
                             {inQueue && <span style={{ position: 'absolute', top: '12px', right: '12px', background: '#fff', color: '#000', padding: '4px 12px', borderRadius: '99px', fontSize: '0.75rem', fontWeight: '600', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>Joined</span>}
                             <span style={{ position: 'absolute', top: '12px', left: '12px', background: 'rgba(255,255,255,0.9)', color: '#000', padding: '4px 10px', borderRadius: '8px', fontSize: '0.7rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <Tag size={10} /> {queue.category || 'Other'}
+                              <Tag size={10} /> {queue.category || 'Other'}
                             </span>
-
                             <h4 style={{ position: 'absolute', bottom: '16px', left: '16px', color: '#fff', margin: 0, textShadow: '0 2px 4px rgba(0,0,0,0.3)', fontSize: '1.35rem', fontWeight: 'bold' }}>{queue.name}</h4>
                           </div>
                         ) : (
@@ -1248,14 +1016,12 @@ function App() {
                               {inQueue && <span style={{ background: '#18181b', color: '#fff', padding: '4px 12px', borderRadius: '99px', fontSize: '0.75rem', fontWeight: '600' }}>Joined</span>}
                             </div>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.75rem', color: '#71717a', background: '#f4f4f5', padding: '4px 8px', borderRadius: '6px', fontWeight: '500' }}>
-                                <Tag size={10} /> {queue.category || 'Other'}
+                              <Tag size={10} /> {queue.category || 'Other'}
                             </span>
                           </div>
                         )}
 
-                        {/* 3. CARD BODY & STATS */}
                         <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
-                          
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#71717a', fontSize: '0.875rem', fontWeight: '500' }}>
                               <UserCircle size={16} /> {queue.manager}
@@ -1266,27 +1032,18 @@ function App() {
                             </div>
                           </div>
 
-                          {/* Location Info */}
                           {queue.location && (queue.location.address || (queue.location.lat && queue.location.lng)) && (
-                            <div 
-                              style={{ 
-                                display: 'flex', alignItems: 'flex-start', gap: '0.5rem', 
-                                color: '#71717a', fontSize: '0.875rem', marginBottom: '1.5rem',
-                                cursor: 'pointer', background: '#f8f9fa', padding: '0.75rem', borderRadius: '8px',
-                                border: '1px solid #f1f3f5', transition: 'background 0.2s'
-                              }}
+                            <div
+                              style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', color: '#71717a', fontSize: '0.875rem', marginBottom: '1.5rem', cursor: 'pointer', background: '#f8f9fa', padding: '0.75rem', borderRadius: '8px', border: '1px solid #f1f3f5', transition: 'background 0.2s' }}
                               onMouseOver={(e) => e.currentTarget.style.background = '#f1f3f5'}
                               onMouseOut={(e) => e.currentTarget.style.background = '#f8f9fa'}
                               onClick={() => {
-                                const query = queue.location.lat && queue.location.lng 
-                                  ? `${queue.location.lat},${queue.location.lng}` 
-                                  : encodeURIComponent(queue.location.address);
+                                const query = queue.location.lat && queue.location.lng ? `${queue.location.lat},${queue.location.lng}` : encodeURIComponent(queue.location.address);
                                 window.open(`https://maps.google.com/?q=${query}`, '_blank');
                               }}
                             >
                               <MapPin size={16} style={{ flexShrink: 0, marginTop: '2px', color: '#10b981' }} />
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                                {/* CHECK FOR UGLY HTTP LINK FROM OLD DATABASE DATA */}
                                 {queue.location.address ? (
                                   <span style={{ fontWeight: '500', color: '#18181b', wordBreak: 'break-word' }}>
                                     {queue.location.address.startsWith('http') ? 'View Pinned Map Location' : queue.location.address}
@@ -1298,8 +1055,7 @@ function App() {
                               </div>
                             </div>
                           )}
-                          
-                          {/* Modern Stat Boxes */}
+
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.5rem' }}>
                             <div style={{ padding: '0.75rem', borderRadius: '8px', background: '#f8f9fa', border: '1px solid #f1f3f5' }}>
                               <div style={{ color: '#71717a', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '700' }}>
@@ -1315,12 +1071,10 @@ function App() {
                             </div>
                           </div>
 
-                          {/* 4. ACTION AREA */}
                           <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid #eaeaea' }}>
                             {inQueue ? (
                               <div className="animate-fade-in" style={{ textAlign: 'center', paddingTop: '0.5rem' }}>
                                 <div style={{ color: '#71717a', fontSize: '0.7rem', marginBottom: '1rem', textTransform: 'uppercase', fontWeight: 'bold', letterSpacing: '0.5px' }}>Your Status</div>
-                                
                                 <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '1.5rem', gap: '1.5rem' }}>
                                   <div>
                                     <div style={{ color: '#71717a', fontSize: '0.75rem', fontWeight: '500', marginBottom: '0.25rem' }}>Position</div>
@@ -1336,37 +1090,32 @@ function App() {
                                     </>
                                   )}
                                 </div>
-                                
-                                {myPos === 0 && (
-                                  <div style={{ color: '#10b981', fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '1rem', letterSpacing: '0.5px' }}>Please approach the desk.</div>
-                                )}
-                                
-                                <button 
+                                {myPos === 0 && <div style={{ color: '#10b981', fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '1rem', letterSpacing: '0.5px' }}>Please approach the desk.</div>}
+                                <button
                                   style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: '#fff', color: '#ef4444', border: '1px solid #fca5a5', padding: '10px', borderRadius: '8px', fontWeight: '600', transition: 'all 0.2s', cursor: processingActionId === queue._id ? 'not-allowed' : 'pointer' }}
-                                  onMouseOver={(e) => { if(processingActionId !== queue._id) e.currentTarget.style.background = '#fef2f2'; }}
-                                  onMouseOut={(e) => { if(processingActionId !== queue._id) e.currentTarget.style.background = '#fff'; }}
+                                  onMouseOver={(e) => { if (processingActionId !== queue._id) e.currentTarget.style.background = '#fef2f2'; }}
+                                  onMouseOut={(e) => { if (processingActionId !== queue._id) e.currentTarget.style.background = '#fff'; }}
                                   onClick={() => performQueueAction(queue._id, 'leave')}
                                   disabled={processingActionId === queue._id}
                                 >
-                                  {processingActionId === queue._id ? <Loader2 size={16} className="animate-spin" /> : <LogOut size={16} />} 
-                                  {processingActionId === queue._id ? 'Processing...' : 'Leave Queue'}
+                                  {processingActionId === queue._id ? <><Loader2 size={16} className="animate-spin" /> Processing...</> : <><LogOut size={16} /> Leave Queue</>}
                                 </button>
                               </div>
                             ) : (
                               <div style={{ marginTop: '0.25rem' }}>
-                                <input 
-                                  type="text" 
-                                  className="premium-input text-sm" 
+                                <input
+                                  type="text"
+                                  className="premium-input text-sm"
                                   style={{ marginBottom: '0.5rem', padding: '0.5rem 1rem' }}
-                                  placeholder="Reason for visit (optional)" 
+                                  placeholder="Reason for visit (optional)"
                                   value={joinNotes[queue._id] || ''}
-                                  onChange={(e) => setJoinNotes({...joinNotes, [queue._id]: e.target.value})}
+                                  onChange={(e) => setJoinNotes({ ...joinNotes, [queue._id]: e.target.value })}
                                   disabled={queue.status === 'paused' || processingActionId === queue._id}
                                 />
-                                <button 
+                                <button
                                   style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: '#18181b', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: '500', opacity: queue.status === 'paused' || processingActionId === queue._id ? 0.5 : 1, transition: 'all 0.2s', cursor: queue.status === 'paused' || processingActionId === queue._id ? 'not-allowed' : 'pointer' }}
-                                  onMouseOver={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#000'; }}
-                                  onMouseOut={(e) => { if(queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#18181b'; }}
+                                  onMouseOver={(e) => { if (queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#000'; }}
+                                  onMouseOut={(e) => { if (queue.status !== 'paused' && processingActionId !== queue._id) e.currentTarget.style.background = '#18181b'; }}
                                   onClick={() => performQueueAction(queue._id, 'join', null, joinNotes[queue._id])}
                                   disabled={queue.status === 'paused' || processingActionId === queue._id}
                                 >
@@ -1374,9 +1123,7 @@ function App() {
                                     <><Loader2 size={18} className="animate-spin" /> Processing...</>
                                   ) : queue.status === 'active' ? (
                                     <><ArrowRight size={18} /> Join Queue</>
-                                  ) : (
-                                    'Queue Paused'
-                                  )}
+                                  ) : 'Queue Paused'}
                                 </button>
                               </div>
                             )}

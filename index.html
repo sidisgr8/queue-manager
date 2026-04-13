@@ -5,7 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>queue-manager</title>
+    <!-- Preload background image so auth page doesn't flash without it -->
     <link rel="preload" as="image" href="/bg-image.webp" type="image/webp">
+    <!-- Load fonts with display=swap so text renders immediately in fallback font,
+         swapping in Inter once it arrives — eliminates the blank/slow text flash -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   </head>
   <body>
     <div id="root"></div>
