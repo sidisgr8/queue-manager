@@ -241,9 +241,12 @@ function App() {
     }
   };
 
+  // NEW FIX: Only fetch queues if there is an active logged-in user
   useEffect(() => {
-    fetchQueues(true);
-  }, []);
+    if (currentUser) {
+      fetchQueues(true);
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     if (currentUser?.role === 'customer' && navigator.geolocation) {
@@ -256,7 +259,10 @@ function App() {
 
   // FIX 2: Cancel any in-flight poll when an action is running to prevent
   // stale responses from overwriting optimistic state updates.
+  // NEW FIX: Also return early if there's no logged-in user to prevent background polling on login page.
   useEffect(() => {
+    if (!currentUser) return; // Prevents polling when sitting on the login page
+
     if (!editingQueue && !editingCustomerTime && !processingActionId) {
       const interval = setInterval(() => {
         if (pollAbortRef.current) pollAbortRef.current.abort();
@@ -271,7 +277,7 @@ function App() {
         }
       };
     }
-  }, [editingQueue, editingCustomerTime, processingActionId]);
+  }, [currentUser, editingQueue, editingCustomerTime, processingActionId]); // Added currentUser to dependencies
 
   useEffect(() => {
     if (currentUser?.role === 'customer') {
